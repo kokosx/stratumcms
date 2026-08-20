@@ -31,6 +31,16 @@ type Entry struct {
 	PublishedAt         sql.NullString
 }
 
+type EntryDraft struct {
+	EntryID      string
+	Title        string
+	Slug         string
+	DocumentJson string
+	Version      int64
+	UpdatedBy    string
+	UpdatedAt    string
+}
+
 type Installation struct {
 	ID        int64
 	CreatedAt string

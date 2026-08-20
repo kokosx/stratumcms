@@ -17,6 +17,7 @@ import (
 	"github.com/kokosx/stratumcms/internal/auth"
 	"github.com/kokosx/stratumcms/internal/config"
 	"github.com/kokosx/stratumcms/internal/content"
+	"github.com/kokosx/stratumcms/internal/editor"
 	"github.com/kokosx/stratumcms/internal/migrations"
 	"github.com/kokosx/stratumcms/internal/platform"
 	"github.com/kokosx/stratumcms/internal/renderer"
@@ -86,10 +87,12 @@ func NewHandler(db *sql.DB, logger *slog.Logger, cfg config.Config) http.Handler
 	}
 	contentService := content.New(db)
 	publicTemplate := template.Must(template.New("public").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>{{.Title}}</title></head><body><main>{{.Content}}</main></body></html>`))
-	h := &handler{auth: newAuthService(db), content: contentService, renderer: renderer.New(contentService.Registry()), templates: templates, publicTemplate: publicTemplate, logger: logger, secureCookies: cfg.SecureCookies}
+	h := &handler{auth: newAuthService(db), content: contentService, editor: editor.New(db, contentService), renderer: renderer.New(contentService.Registry()), templates: templates, publicTemplate: publicTemplate, logger: logger, secureCookies: cfg.SecureCookies}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /static/app.css", css)
+	mux.HandleFunc("GET /static/editor.css", editorCSS)
+	mux.HandleFunc("GET /static/datastar-1.0.0.js", datastarJS)
 	mux.HandleFunc("GET /setup", h.setupForm)
 	mux.HandleFunc("POST /setup", h.setup)
 	mux.HandleFunc("GET /login", h.loginForm)
@@ -106,6 +109,16 @@ func NewHandler(db *sql.DB, logger *slog.Logger, cfg config.Config) http.Handler
 	mux.Handle("POST /admin/pages", h.requireAuth(http.HandlerFunc(h.createEntry("page"))))
 	mux.Handle("GET /admin/pages/{id}/edit", h.requireAuth(http.HandlerFunc(h.editEntry("page"))))
 	mux.Handle("POST /admin/pages/{id}", h.requireAuth(http.HandlerFunc(h.updateEntry("page"))))
+	mux.Handle("GET /admin/editor/{id}", h.requireAuth(http.HandlerFunc(h.editorPage(""))))
+	mux.Handle("GET /admin/editor/{id}/preview", h.requireAuth(http.HandlerFunc(h.editorPreview)))
+	mux.Handle("POST /admin/editor/{id}/blocks", h.requireAuth(http.HandlerFunc(h.editorAddBlock)))
+	mux.Handle("POST /admin/editor/{id}/blocks/{nodeID}", h.requireAuth(http.HandlerFunc(h.editorUpdateBlock)))
+	mux.Handle("POST /admin/editor/{id}/blocks/{nodeID}/delete", h.requireAuth(http.HandlerFunc(h.editorDeleteBlock)))
+	mux.Handle("POST /admin/editor/{id}/blocks/{nodeID}/duplicate", h.requireAuth(http.HandlerFunc(h.editorDuplicateBlock)))
+	mux.Handle("POST /admin/editor/{id}/blocks/{nodeID}/move", h.requireAuth(http.HandlerFunc(h.editorMoveBlock)))
+	mux.Handle("POST /admin/editor/{id}/metadata", h.requireAuth(http.HandlerFunc(h.editorMetadata)))
+	mux.Handle("POST /admin/editor/{id}/save", h.requireAuth(http.HandlerFunc(h.editorSave)))
+	mux.Handle("POST /admin/editor/{id}/publish", h.requireAuth(http.HandlerFunc(h.editorPublish)))
 	mux.HandleFunc("GET /{path...}", h.public)
 	return h.securityHeaders(h.requestLog(mux))
 }
@@ -118,6 +131,7 @@ func health(w http.ResponseWriter, _ *http.Request) {
 type handler struct {
 	auth           *authService
 	content        *content.Service
+	editor         *editor.Service
 	renderer       *renderer.Renderer
 	templates      *template.Template
 	publicTemplate *template.Template
@@ -132,13 +146,17 @@ func (h *handler) public(w http.ResponseWriter, r *http.Request) {
 	}
 	published, err := h.content.ResolvePublished(r.Context(), r.URL.Path)
 	if err != nil {
-		http.NotFound(w, r)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+		} else {
+			h.internalError(w, err)
+		}
 		return
 	}
 	body, err := h.renderer.Render(published.Document)
 	if err != nil {
 		h.logger.Error("render published document", "error", err)
-		http.NotFound(w, r)
+		h.internalError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

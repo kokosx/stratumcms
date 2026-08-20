@@ -17,6 +17,9 @@ func (r *Renderer) Render(document documents.Document) (template.HTML, error) {
 	if err := r.registry.Validate(document); err != nil {
 		return "", err
 	}
+	return r.render(document)
+}
+func (r *Renderer) render(document documents.Document) (template.HTML, error) {
 	var renderNodes func([]documents.Node) (template.HTML, error)
 	renderNodes = func(nodes []documents.Node) (template.HTML, error) {
 		var b bytes.Buffer
@@ -42,4 +45,13 @@ func (r *Renderer) Render(document documents.Document) (template.HTML, error) {
 		return "", fmt.Errorf("render document: %w", err)
 	}
 	return result, nil
+}
+
+// RenderDraft renders a structurally valid draft without allowing it to be
+// published until required user-facing fields pass strict validation.
+func (r *Renderer) RenderDraft(document documents.Document) (template.HTML, error) {
+	if err := r.registry.ValidateDraft(document); err != nil {
+		return "", err
+	}
+	return r.render(document)
 }

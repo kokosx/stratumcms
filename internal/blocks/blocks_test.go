@@ -22,6 +22,7 @@ func TestValidation(t *testing.T) {
 		{"required", documents.Document{Version: 1, Children: []documents.Node{textNode("a", map[string]any{})}}, "required"},
 		{"enum", documents.Document{Version: 1, Children: []documents.Node{{ID: "a", Type: "core.hero", Version: 1, Props: map[string]any{"heading": "x"}, Settings: map[string]any{"variant": "bad"}}}}, "must be one of"},
 		{"children", documents.Document{Version: 1, Children: []documents.Node{{ID: "a", Type: "core.text", Version: 1, Props: map[string]any{"text": "x"}, Settings: map[string]any{}, Children: []documents.Node{textNode("b", map[string]any{"text": "y"})}}}}, "does not allow children"},
+		{"unsafe url", documents.Document{Version: 1, Children: []documents.Node{{ID: "a", Type: "core.button", Version: 1, Props: map[string]any{"label": "Go", "url": "javascript:alert(1)"}, Settings: map[string]any{}}}}, "unsafe URL scheme"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

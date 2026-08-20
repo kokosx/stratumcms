@@ -12,6 +12,8 @@ import (
 //go:embed templates/*.html
 var coreTemplates embed.FS
 
+var parsedCoreTemplates = template.Must(template.ParseFS(coreTemplates, "templates/*.html"))
+
 func CoreRegistry() *Registry {
 	r := NewRegistry()
 	register := func(def Definition, name string) {
@@ -29,12 +31,8 @@ func CoreRegistry() *Registry {
 func templateRenderer(name string, definition Definition) Renderer {
 	return func(node documents.Node, children template.HTML) (template.HTML, error) {
 		node = withDefaults(node, definition)
-		tmpl, err := template.ParseFS(coreTemplates, "templates/*.html")
-		if err != nil {
-			return "", err
-		}
 		var b bytes.Buffer
-		if err := tmpl.ExecuteTemplate(&b, name, struct {
+		if err := parsedCoreTemplates.ExecuteTemplate(&b, name, struct {
 			Node     documents.Node
 			Children template.HTML
 		}{node, children}); err != nil {

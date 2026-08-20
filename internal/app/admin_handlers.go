@@ -68,19 +68,7 @@ func (h *handler) createEntry(kind string) http.HandlerFunc {
 	}
 }
 func (h *handler) editEntry(kind string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		entry, err := h.content.GetEntryByType(r.Context(), r.PathValue("id"), kind)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		revisions, err := h.content.ListRevisions(r.Context(), entry.ID)
-		if err != nil {
-			h.internalError(w, err)
-			return
-		}
-		h.render(w, "admin_edit", adminEditData{User: currentUser(r), CSRFToken: h.csrfToken(w, r), Kind: kind, Singular: label(kind), Entry: entry, Revisions: revisions})
-	}
+	return h.editorPage(kind)
 }
 func (h *handler) updateEntry(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

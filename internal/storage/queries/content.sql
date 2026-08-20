@@ -55,3 +55,14 @@ INSERT INTO routes (id, path, resource_type, resource_id, canonical, created_at,
 
 -- name: UpdateEntryRoute :exec
 UPDATE routes SET path = ?, updated_at = ? WHERE resource_type = 'entry' AND resource_id = ? AND canonical = 1;
+
+-- name: GetEntryDraft :one
+SELECT entry_id, title, slug, document_json, version, updated_by, updated_at FROM entry_drafts WHERE entry_id = ?;
+
+-- name: CreateEntryDraft :exec
+INSERT INTO entry_drafts (entry_id, title, slug, document_json, version, updated_by, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+-- name: UpdateEntryDraft :execrows
+UPDATE entry_drafts SET title = ?, slug = ?, document_json = ?, version = version + 1, updated_by = ?, updated_at = ?
+WHERE entry_id = ? AND version = ?;

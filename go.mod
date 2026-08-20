@@ -8,7 +8,12 @@ require (
 )
 
 require (
+	github.com/CAFxX/httpcompression v0.0.9 // indirect
+	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/ebitengine/purego v0.9.1 // indirect
+	github.com/klauspost/compress v1.18.0 // indirect
+	github.com/starfederation/datastar-go v1.2.2 // indirect
 	github.com/tursodatabase/turso-go-platform-libs v0.8.0-pre.6 // indirect
+	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 )

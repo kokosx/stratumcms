@@ -20,8 +20,9 @@ type Migration struct {
 
 var all = []Migration{
 	{Version: 1, Name: "schema_migrations", SQL: mustRead("sql/001_schema_migrations.sql")},
-		{Version: 2, Name: "users_and_sessions", SQL: mustRead("sql/002_users_and_sessions.sql")},
-		{Version: 3, Name: "content", SQL: mustRead("sql/003_content.sql")},
+	{Version: 2, Name: "users_and_sessions", SQL: mustRead("sql/002_users_and_sessions.sql")},
+	{Version: 3, Name: "content", SQL: mustRead("sql/003_content.sql")},
+	{Version: 4, Name: "entry_drafts", SQL: mustRead("sql/004_entry_drafts.sql")},
 }
 
 // Run applies migrations not yet recorded in schema_migrations.

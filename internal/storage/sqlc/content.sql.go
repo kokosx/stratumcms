@@ -46,6 +46,34 @@ func (q *Queries) CreateEntry(ctx context.Context, arg CreateEntryParams) error 
 	return err
 }
 
+const createEntryDraft = `-- name: CreateEntryDraft :exec
+INSERT INTO entry_drafts (entry_id, title, slug, document_json, version, updated_by, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+`
+
+type CreateEntryDraftParams struct {
+	EntryID      string
+	Title        string
+	Slug         string
+	DocumentJson string
+	Version      int64
+	UpdatedBy    string
+	UpdatedAt    string
+}
+
+func (q *Queries) CreateEntryDraft(ctx context.Context, arg CreateEntryDraftParams) error {
+	_, err := q.db.ExecContext(ctx, createEntryDraft,
+		arg.EntryID,
+		arg.Title,
+		arg.Slug,
+		arg.DocumentJson,
+		arg.Version,
+		arg.UpdatedBy,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
 const createRevision = `-- name: CreateRevision :exec
 INSERT INTO revisions (id, entry_id, number, title, document_json, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
 `
@@ -166,6 +194,25 @@ func (q *Queries) GetEntryByType(ctx context.Context, arg GetEntryByTypeParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PublishedAt,
+	)
+	return i, err
+}
+
+const getEntryDraft = `-- name: GetEntryDraft :one
+SELECT entry_id, title, slug, document_json, version, updated_by, updated_at FROM entry_drafts WHERE entry_id = ?
+`
+
+func (q *Queries) GetEntryDraft(ctx context.Context, entryID string) (EntryDraft, error) {
+	row := q.db.QueryRowContext(ctx, getEntryDraft, entryID)
+	var i EntryDraft
+	err := row.Scan(
+		&i.EntryID,
+		&i.Title,
+		&i.Slug,
+		&i.DocumentJson,
+		&i.Version,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -429,6 +476,37 @@ func (q *Queries) UpdateEntry(ctx context.Context, arg UpdateEntryParams) error 
 		arg.ID,
 	)
 	return err
+}
+
+const updateEntryDraft = `-- name: UpdateEntryDraft :execrows
+UPDATE entry_drafts SET title = ?, slug = ?, document_json = ?, version = version + 1, updated_by = ?, updated_at = ?
+WHERE entry_id = ? AND version = ?
+`
+
+type UpdateEntryDraftParams struct {
+	Title        string
+	Slug         string
+	DocumentJson string
+	UpdatedBy    string
+	UpdatedAt    string
+	EntryID      string
+	Version      int64
+}
+
+func (q *Queries) UpdateEntryDraft(ctx context.Context, arg UpdateEntryDraftParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateEntryDraft,
+		arg.Title,
+		arg.Slug,
+		arg.DocumentJson,
+		arg.UpdatedBy,
+		arg.UpdatedAt,
+		arg.EntryID,
+		arg.Version,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateEntryRoute = `-- name: UpdateEntryRoute :exec

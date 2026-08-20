@@ -4,6 +4,7 @@ package blocks
 import (
 	"fmt"
 	"html/template"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -65,6 +66,16 @@ func (r *Registry) Definitions() []Definition {
 }
 
 func (r *Registry) Validate(document documents.Document) error {
+	return r.validate(document, true)
+}
+
+// ValidateDraft accepts structurally safe documents while allowing empty
+// user-facing required fields until a revision is saved or published.
+func (r *Registry) ValidateDraft(document documents.Document) error {
+	return r.validate(document, false)
+}
+
+func (r *Registry) validate(document documents.Document, requireFields bool) error {
 	if document.Version != documents.Version {
 		return fmt.Errorf("unsupported document version %d", document.Version)
 	}
@@ -92,10 +103,10 @@ func (r *Registry) Validate(document documents.Document) error {
 			if err != nil {
 				return fmt.Errorf("%s: %w", nodePath, err)
 			}
-			if err := validateFields(nodePath+".props", node.Props, def.Props); err != nil {
+			if err := validateFields(nodePath+".props", node.Props, def.Props, requireFields); err != nil {
 				return err
 			}
-			if err := validateFields(nodePath+".settings", node.Settings, def.Settings); err != nil {
+			if err := validateFields(nodePath+".settings", node.Settings, def.Settings, requireFields); err != nil {
 				return err
 			}
 			if len(node.Children) > 0 && !def.AllowsChildren {
@@ -109,13 +120,18 @@ func (r *Registry) Validate(document documents.Document) error {
 	}
 	return visit(document.Children, 1, "document")
 }
-func validateFields(path string, values map[string]any, schema map[string]Field) error {
+func validateFields(path string, values map[string]any, schema map[string]Field, requireFields bool) error {
 	for name, field := range schema {
 		value, ok := values[name]
-		if field.Required && !ok {
+		if field.Required && requireFields && !ok {
 			return fmt.Errorf("%s.%s: required", path, name)
 		}
 		if ok {
+			if field.Required && requireFields && (field.Type == "text" || field.Type == "textarea" || field.Type == "url") {
+				if text, isText := value.(string); isText && strings.TrimSpace(text) == "" {
+					return fmt.Errorf("%s.%s: required", path, name)
+				}
+			}
 			if err := validateField(value, field); err != nil {
 				return fmt.Errorf("%s.%s: %w", path, name, err)
 			}
@@ -131,8 +147,14 @@ func validateFields(path string, values map[string]any, schema map[string]Field)
 func validateField(value any, field Field) error {
 	switch field.Type {
 	case "text", "textarea", "url":
-		if _, ok := value.(string); !ok {
+		text, ok := value.(string)
+		if !ok {
 			return fmt.Errorf("must be a string")
+		}
+		if field.Type == "url" {
+			if err := validateURL(text); err != nil {
+				return err
+			}
 		}
 	case "boolean":
 		if _, ok := value.(bool); !ok {
@@ -158,4 +180,28 @@ func validateField(value any, field Field) error {
 		return fmt.Errorf("unsupported field type %q", field.Type)
 	}
 	return nil
+}
+
+// ValidateFieldValue validates one value against a registry field schema.
+func ValidateFieldValue(value any, field Field) error { return validateField(value, field) }
+
+func validateURL(value string) error {
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("must not contain control characters")
+		}
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("must be a valid URL")
+	}
+	if parsed.Scheme == "" {
+		return nil
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https", "mailto", "tel":
+		return nil
+	default:
+		return fmt.Errorf("uses unsafe URL scheme")
+	}
 }
