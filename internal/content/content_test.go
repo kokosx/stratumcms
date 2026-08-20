@@ -152,3 +152,43 @@ func TestMetadataOnlySavePreservesDocument(t *testing.T) {
 		t.Fatalf("document=%#v err=%v", got, err)
 	}
 }
+
+func TestSEORemainsDraftUntilPublish(t *testing.T) {
+	ctx := context.Background()
+	db, err := turso.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := store.New(db).CreateUser(ctx, store.CreateUserParams{ID: "author", Email: "author@example.test", Username: "author", PasswordHash: "hash", DisplayName: "Author", Role: "administrator", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(db)
+	entry, err := s.CreateEntry(ctx, "page", "author", Input{Title: "SEO"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := SEO{Title: "Old search title", Description: "Old", Robots: "index,follow"}
+	if _, err = s.PublishEntry(ctx, entry.ID, "author", Input{Title: "SEO", SEO: &old}); err != nil {
+		t.Fatal(err)
+	}
+	next := SEO{Title: "New search title", Description: "New", Canonical: "/seo", Robots: "noindex,follow"}
+	if _, err = s.SaveEntry(ctx, entry.ID, "author", Input{Title: "SEO", SEO: &next}); err != nil {
+		t.Fatal(err)
+	}
+	published, err := s.ResolvePublished(ctx, "/seo")
+	if err != nil || published.SEO.Title != old.Title {
+		t.Fatalf("draft leaked: %#v err=%v", published.SEO, err)
+	}
+	if _, err = s.PublishEntry(ctx, entry.ID, "author", Input{Title: "SEO", SEO: &next}); err != nil {
+		t.Fatal(err)
+	}
+	published, err = s.ResolvePublished(ctx, "/seo")
+	if err != nil || published.SEO.Title != next.Title || published.SEO.Robots != "noindex,follow" {
+		t.Fatalf("SEO not published: %#v err=%v", published.SEO, err)
+	}
+}

@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"errors"
 	"html/template"
@@ -14,6 +15,7 @@ import (
 	"github.com/kokosx/stratumcms/internal/blocks"
 	"github.com/kokosx/stratumcms/internal/documents"
 	"github.com/kokosx/stratumcms/internal/editor"
+	"github.com/kokosx/stratumcms/internal/media"
 )
 
 type editorData struct {
@@ -27,6 +29,7 @@ type editorData struct {
 	Tree          []editorTreeNode
 	Inspector     []editorInspector
 	Status, Error string
+	Media         []media.Item
 }
 type editorTreeNode struct {
 	Node        documents.Node
@@ -50,12 +53,17 @@ func (h *handler) editorPage(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		entryID := r.PathValue("id")
 		if kind != "" {
-			if _, err := h.content.GetEntryByType(r.Context(), entryID, kind); err != nil {
+			entry, err := h.content.GetEntryByType(r.Context(), entryID, kind)
+			if err != nil {
 				if errors.Is(err, sqlErrNoRows()) {
 					http.NotFound(w, r)
 				} else {
 					h.internalError(w, err)
 				}
+				return
+			}
+			if currentUser(r).Role == "author" && (kind != "post" || entry.AuthorID != currentUser(r).ID) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
 				return
 			}
 		}
@@ -75,7 +83,7 @@ func (h *handler) editorPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	result, err := h.presentation.RenderDraft(r.Context(), draft.Kind, draft.Title, draft.Document)
+	result, err := h.presentation.RenderDraft(r.Context(), draft.Kind, draft.Title, draft.Document, draft.SEO)
 	if err != nil {
 		h.internalError(w, err)
 		return
@@ -150,6 +158,7 @@ func (h *handler) editorMutation(w http.ResponseWriter, r *http.Request, status 
 }
 func (h *handler) editorData(user userView, csrf string, draft editor.Draft) editorData {
 	data := editorData{User: user, CSRFToken: csrf, Kind: draft.Kind, Draft: draft, Blocks: h.editor.Registry().Definitions(), Status: "Draft v" + strconv.FormatInt(draft.Version, 10)}
+	data.Media, _ = h.media.List(context.Background())
 	var walk func([]documents.Node)
 	walk = func(nodes []documents.Node) {
 		for _, node := range nodes {

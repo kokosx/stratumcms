@@ -146,7 +146,7 @@ func validateFields(path string, values map[string]any, schema map[string]Field,
 }
 func validateField(value any, field Field) error {
 	switch field.Type {
-	case "text", "textarea", "url":
+	case "text", "textarea", "url", "media":
 		text, ok := value.(string)
 		if !ok {
 			return fmt.Errorf("must be a string")
@@ -155,6 +155,9 @@ func validateField(value any, field Field) error {
 			if err := validateURL(text); err != nil {
 				return err
 			}
+		}
+		if field.Type == "media" && strings.TrimSpace(text) == "" {
+			return fmt.Errorf("must be a media ID")
 		}
 	case "boolean":
 		if _, ok := value.(bool); !ok {

@@ -24,7 +24,15 @@ var all = []Migration{
 	{Version: 3, Name: "content", SQL: mustRead("sql/003_content.sql")},
 	{Version: 4, Name: "entry_drafts", SQL: mustRead("sql/004_entry_drafts.sql")},
 	{Version: 5, Name: "site_presentation", SQL: mustRead("sql/005_site_presentation.sql")},
+	{Version: 6, Name: "media", SQL: mustRead("sql/006_media.sql")},
+	{Version: 7, Name: "revision_seo", SQL: mustRead("sql/007_revision_seo.sql")},
+	{Version: 8, Name: "redirects", SQL: mustRead("sql/008_redirects.sql")},
+	{Version: 9, Name: "menus", SQL: mustRead("sql/009_menus.sql")},
+	{Version: 10, Name: "operational_indexes", SQL: mustRead("sql/010_operational_indexes.sql")},
 }
+
+// LatestVersion is the schema version required by this binary.
+func LatestVersion() int { return all[len(all)-1].Version }
 
 // Run applies migrations not yet recorded in schema_migrations.
 func Run(ctx context.Context, db *sql.DB) error {

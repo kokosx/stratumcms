@@ -1,2 +1,6 @@
 /stratum
 /data/
+*.tar.gz
+*.db-wal
+*.db-shm
+.browser/

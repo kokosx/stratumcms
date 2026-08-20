@@ -16,6 +16,7 @@ import (
 	"github.com/kokosx/stratumcms/internal/config"
 	"github.com/kokosx/stratumcms/internal/content"
 	"github.com/kokosx/stratumcms/internal/migrations"
+	"github.com/kokosx/stratumcms/internal/platform"
 	store "github.com/kokosx/stratumcms/internal/storage/sqlc"
 	"github.com/kokosx/stratumcms/internal/storage/turso"
 )
@@ -28,6 +29,44 @@ func TestSetupAllowsOnlyOneAdministrator(t *testing.T) {
 	resp := get(t, client, s.URL+"/setup")
 	if resp.Request.URL.Path != "/admin" {
 		t.Fatalf("setup after completion ended at %s", resp.Request.URL.Path)
+	}
+}
+
+func TestRootReadinessRolesAndBodyLimit(t *testing.T) {
+	s := testServer(t)
+	defer s.Close()
+	client := testClient(t)
+	resp := get(t, client, s.URL+"/")
+	if resp.Request.URL.Path != "/setup" {
+		t.Fatalf("fresh root ended at %s", resp.Request.URL.Path)
+	}
+	setup(t, client, s.URL, "admin@example.test", "admin")
+	ready := get(t, client, s.URL+"/ready")
+	if ready.StatusCode != http.StatusOK {
+		t.Fatalf("ready=%d", ready.StatusCode)
+	}
+	token := csrf(t, client, s.URL+"/admin/users")
+	post(t, client, s.URL+"/admin/users", url.Values{"csrf_token": {token}, "email": {"author@example.test"}, "username": {"author"}, "display_name": {"Author"}, "role": {"author"}, "password": {"a long author password"}})
+	logout(t, client, s.URL)
+	login(t, client, s.URL, "author", "a long author password")
+	for _, path := range []string{"/admin/pages", "/admin/appearance/styles", "/admin/users", "/admin/redirects"} {
+		r := get(t, client, s.URL+path)
+		if r.StatusCode != http.StatusForbidden {
+			t.Errorf("%s status=%d, want 403", path, r.StatusCode)
+		}
+	}
+	req, err := http.NewRequest(http.MethodPost, s.URL+"/login", strings.NewReader("login="+strings.Repeat("x", 2<<20)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	large, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer large.Body.Close()
+	if large.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("large login=%d", large.StatusCode)
 	}
 }
 
@@ -162,6 +201,9 @@ func TestPublicRouteUsesPublishedRevisionAndAdminKindIsEnforced(t *testing.T) {
 func TestPublicPageCacheServesHitWithoutDatabaseAndSupportsHEAD(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
+	if err := platform.EnsureDataDir(dataDir); err != nil {
+		t.Fatal(err)
+	}
 	db, err := turso.Open(ctx, dataDir)
 	if err != nil {
 		t.Fatal(err)
@@ -223,6 +265,9 @@ func TestPublicPageCacheServesHitWithoutDatabaseAndSupportsHEAD(t *testing.T) {
 func testServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	dataDir := t.TempDir()
+	if err := platform.EnsureDataDir(dataDir); err != nil {
+		t.Fatal(err)
+	}
 	db, err := turso.Open(context.Background(), dataDir)
 	if err != nil {
 		t.Fatal(err)

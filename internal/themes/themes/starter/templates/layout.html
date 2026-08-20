@@ -1,4 +1,4 @@
 {{define "layout"}}<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Title}}</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Title}}</title>{{with .Description}}<meta name="description" content="{{.}}">{{end}}{{with .Canonical}}<link rel="canonical" href="{{.}}">{{end}}{{with .Robots}}<meta name="robots" content="{{.}}">{{end}}
 <link rel="stylesheet" href="{{.ThemeStyles}}"><link rel="stylesheet" href="{{.SiteStyles}}"></head>
-<body><main class="stratum-container">{{template "content" .}}</main></body></html>{{end}}
+<body>{{if .Navigation}}<nav class="stratum-navigation" aria-label="Primary"><div class="stratum-container">{{range .Navigation}}<a href="{{.URL}}">{{.Label}}</a>{{end}}</div></nav>{{end}}<main class="stratum-container">{{template "content" .}}</main></body></html>{{end}}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/kokosx/stratumcms/internal/cache"
 	"github.com/kokosx/stratumcms/internal/content"
+	"github.com/kokosx/stratumcms/internal/documents"
 	"github.com/kokosx/stratumcms/internal/editor"
 	"github.com/kokosx/stratumcms/internal/presentation"
 )
@@ -24,30 +25,38 @@ func New(c *content.Service, pages *cache.Pages, p *presentation.Service, logger
 	return &Service{c, pages, p, logger}
 }
 func (s *Service) Publish(ctx context.Context, editorService *editor.Service, entryID, userID string, version int64) (editor.Draft, error) {
+	before, _ := s.content.GetEntry(ctx, entryID)
 	draft, err := editorService.Publish(ctx, entryID, userID, version)
 	if err != nil {
 		return editor.Draft{}, err
+	}
+	if before.Route != "" {
+		if err := s.pages.InvalidatePath(before.Route); err != nil {
+			s.logger.Error("page_cache_invalidate", "path", before.Route, "error", err)
+		}
 	}
 	if err := s.pages.InvalidateTag("entry:" + entryID); err != nil {
 		s.logger.Error("page_cache_invalidate", "tag", "entry:"+entryID, "error", err)
 	} else {
 		s.logger.Debug("page_cache_invalidate", "tag", "entry:"+entryID)
 	}
-	path := "/" + content.Slug(draft.Slug)
-	if draft.Kind == "post" {
-		path = "/blog/" + content.Slug(draft.Slug)
-	}
-	published, err := s.content.ResolvePublished(ctx, path)
+	published, err := s.content.GetPublishedByEntryID(ctx, entryID)
 	if err != nil {
 		s.logger.Error("warm published page: resolve", "entry_id", entryID, "error", err)
 		return draft, nil
 	}
-	result, err := s.presentation.Render(ctx, published.Kind, published.Title, published.Document)
+	if published.SEO.Canonical == "" {
+		published.SEO.Canonical = published.Path
+	}
+	if published.SEO.Robots == "" {
+		published.SEO.Robots = "index,follow"
+	}
+	result, err := s.presentation.Render(ctx, published.Kind, published.Title, published.Document, published.SEO)
 	if err != nil {
 		s.logger.Error("warm published page: render", "entry_id", entryID, "error", err)
 		return draft, nil
 	}
-	entry := cache.Entry{Path: published.Path, HTML: result.HTML, ETag: ETag(result.HTML), Dependencies: []string{"entry:" + published.EntryID, "revision:" + published.RevisionID, "theme:" + result.ThemeID, "presentation", "route:" + published.Path}}
+	entry := cache.Entry{Path: published.Path, HTML: result.HTML, ETag: ETag(result.HTML), Dependencies: dependencies(published.Document, published.EntryID, published.RevisionID, published.Path, result.ThemeID)}
 	if err := s.pages.Put(entry); err != nil {
 		s.logger.Error("warm published page: cache", "entry_id", entryID, "error", err)
 	} else {
@@ -57,3 +66,22 @@ func (s *Service) Publish(ctx context.Context, editorService *editor.Service, en
 }
 func ETag(html []byte) string         { return fmt.Sprintf("\"%x\"", cacheHash(html)) }
 func cacheHash(value []byte) [32]byte { return sha256.Sum256(value) }
+
+func dependencies(document documents.Document, entryID, revisionID, route, themeID string) []string {
+	deps := []string{"entry:" + entryID, "revision:" + revisionID, "theme:" + themeID, "presentation", "route:" + route}
+	seen := map[string]bool{}
+	var walk func([]documents.Node)
+	walk = func(nodes []documents.Node) {
+		for _, n := range nodes {
+			if n.Type == "core.image" {
+				if mediaID, ok := n.Props["media"].(string); ok && mediaID != "" && !seen[mediaID] {
+					deps = append(deps, "media:"+mediaID)
+					seen[mediaID] = true
+				}
+			}
+			walk(n.Children)
+		}
+	}
+	walk(document.Children)
+	return deps
+}

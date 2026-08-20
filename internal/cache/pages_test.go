@@ -61,6 +61,25 @@ func TestPagesInvalidationAndCorruption(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestPagesRejectsMismatchedHTML(t *testing.T) {
+	p, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Put(Entry{Path: "/a", HTML: []byte("old"), ETag: "\"a\""}); err != nil {
+		t.Fatal(err)
+	}
+	_, html, _, err := p.names("/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(html, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.Get("/a"); ok {
+		t.Fatal("mismatched HTML was served")
+	}
+}
 func TestPagesInvalidatePathAndClear(t *testing.T) {
 	p, err := New(t.TempDir())
 	if err != nil {

@@ -2,6 +2,7 @@ package themes
 
 import (
 	"bytes"
+	"github.com/kokosx/stratumcms/internal/menus"
 	"html/template"
 	"strings"
 	"testing"
@@ -19,10 +20,12 @@ func TestStarterRendersPageAndPost(t *testing.T) {
 	for _, kind := range []string{"page", "post"} {
 		var b bytes.Buffer
 		err := theme.Execute(&b, kind, struct {
-			Title                   string
-			Content                 template.HTML
-			SiteStyles, ThemeStyles string
-		}{"Title", template.HTML("<p>Body</p>"), "/site.css", "/theme.css"})
+			Title                          string
+			Content                        template.HTML
+			SiteStyles, ThemeStyles        string
+			Description, Canonical, Robots string
+			Navigation                     []menus.Item
+		}{Title: "Title", Content: template.HTML("<p>Body</p>"), SiteStyles: "/site.css", ThemeStyles: "/theme.css"})
 		if err != nil {
 			t.Fatal(err)
 		}

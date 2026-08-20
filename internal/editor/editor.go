@@ -4,6 +4,7 @@ package editor
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -27,9 +28,11 @@ type Draft struct {
 	EntryID, Kind, Title, Slug, UpdatedBy, UpdatedAt string
 	Document                                         documents.Document
 	Version                                          int64
+	SEO                                              content.SEO
 }
 
 type Service struct {
+	db       *sql.DB
 	queries  *store.Queries
 	content  *content.Service
 	registry *blocks.Registry
@@ -38,7 +41,7 @@ type Service struct {
 }
 
 func New(db *sql.DB, contentService *content.Service) *Service {
-	return &Service{queries: store.New(db), content: contentService, registry: contentService.Registry(), now: time.Now, newID: id.New}
+	return &Service{db: db, queries: store.New(db), content: contentService, registry: contentService.Registry(), now: time.Now, newID: id.New}
 }
 
 func (s *Service) Registry() *blocks.Registry { return s.registry }
@@ -225,6 +228,17 @@ func (s *Service) UpdateMetadata(ctx context.Context, entryID, userID string, ve
 	draft.Title, draft.Slug = strings.TrimSpace(title), strings.TrimSpace(slug)
 	return s.persist(ctx, draft, userID)
 }
+func (s *Service) UpdateSEO(ctx context.Context, entryID, userID string, version int64, seo content.SEO) (Draft, error) {
+	draft, err := s.loadVersion(ctx, entryID, userID, version)
+	if err != nil {
+		return Draft{}, err
+	}
+	if err := content.ValidateSEO(seo); err != nil {
+		return Draft{}, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	draft.SEO = seo
+	return s.persist(ctx, draft, userID)
+}
 func (s *Service) SaveDraft(ctx context.Context, entryID, userID string, version int64) (Draft, error) {
 	return s.save(ctx, entryID, userID, version, false)
 }
@@ -243,7 +257,8 @@ func (s *Service) save(ctx context.Context, entryID, userID string, version int6
 	if err != nil {
 		return Draft{}, err
 	}
-	_, err = s.content.SaveEntryWithDraft(ctx, entryID, userID, content.Input{Title: draft.Title, Slug: draft.Slug, Document: &draft.Document}, content.DraftUpdate{Title: draft.Title, Slug: draft.Slug, DocumentJSON: string(json), UpdatedBy: userID, Version: version}, publish)
+	seoJSON, _ := jsonMarshal(draft.SEO)
+	_, err = s.content.SaveEntryWithDraft(ctx, entryID, userID, content.Input{Title: draft.Title, Slug: draft.Slug, Document: &draft.Document, SEO: &draft.SEO}, content.DraftUpdate{Title: draft.Title, Slug: draft.Slug, DocumentJSON: string(json), SEOJSON: seoJSON, UpdatedBy: userID, Version: version}, publish)
 	if errors.Is(err, content.ErrConflict) {
 		return Draft{}, ErrConflict
 	}
@@ -275,10 +290,12 @@ func (s *Service) persist(ctx context.Context, draft Draft, userID string) (Draf
 		return Draft{}, err
 	}
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	changed, err := s.queries.UpdateEntryDraft(ctx, store.UpdateEntryDraftParams{Title: draft.Title, Slug: draft.Slug, DocumentJson: string(json), UpdatedBy: userID, UpdatedAt: now, EntryID: draft.EntryID, Version: draft.Version})
+	seoJSON, _ := jsonMarshal(draft.SEO)
+	result, err := s.db.ExecContext(ctx, `UPDATE entry_drafts SET title=?,slug=?,document_json=?,seo_json=?,version=version+1,updated_by=?,updated_at=? WHERE entry_id=? AND version=?`, draft.Title, draft.Slug, string(json), seoJSON, userID, now, draft.EntryID, draft.Version)
 	if err != nil {
 		return Draft{}, fmt.Errorf("update editor draft: %w", err)
 	}
+	changed, _ := result.RowsAffected()
 	if changed != 1 {
 		return Draft{}, ErrConflict
 	}
@@ -298,8 +315,20 @@ func (s *Service) fromRow(ctx context.Context, row store.EntryDraft) (Draft, err
 	if err != nil {
 		return Draft{}, fmt.Errorf("get draft entry: %w", err)
 	}
-	return Draft{EntryID: row.EntryID, Kind: entryKind(entry.ContentTypeID), Title: row.Title, Slug: row.Slug, Document: doc, Version: row.Version, UpdatedBy: row.UpdatedBy, UpdatedAt: row.UpdatedAt}, nil
+	var seo content.SEO
+	var raw string
+	if err := s.db.QueryRowContext(ctx, `SELECT seo_json FROM entry_drafts WHERE entry_id=?`, row.EntryID).Scan(&raw); err != nil {
+		return Draft{}, err
+	}
+	if raw != "" && raw != "{}" {
+		if err := jsonUnmarshal(raw, &seo); err != nil {
+			return Draft{}, fmt.Errorf("parse draft SEO: %w", err)
+		}
+	}
+	return Draft{EntryID: row.EntryID, Kind: entryKind(entry.ContentTypeID), Title: row.Title, Slug: row.Slug, Document: doc, Version: row.Version, UpdatedBy: row.UpdatedBy, UpdatedAt: row.UpdatedAt, SEO: seo}, nil
 }
+func jsonMarshal(v any) (string, error)     { b, e := json.Marshal(v); return string(b), e }
+func jsonUnmarshal(raw string, v any) error { return json.Unmarshal([]byte(raw), v) }
 func defaults(schema map[string]blocks.Field) map[string]any {
 	values := make(map[string]any, len(schema))
 	for name, field := range schema {

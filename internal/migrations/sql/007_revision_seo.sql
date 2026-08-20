@@ -1,0 +1,2 @@
+ALTER TABLE revisions ADD COLUMN seo_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE entry_drafts ADD COLUMN seo_json TEXT NOT NULL DEFAULT '{}';

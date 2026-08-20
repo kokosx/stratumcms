@@ -26,6 +26,7 @@ func CoreRegistry() *Registry {
 	register(Definition{ID: "core.button", Name: "Button", Version: 1, Category: "action", Props: map[string]Field{"label": {Type: "text", Required: true}, "url": {Type: "url", Required: true}}, Settings: map[string]Field{}}, "button")
 	register(Definition{ID: "core.hero", Name: "Hero", Version: 1, Category: "layout", Props: map[string]Field{"heading": {Type: "text", Required: true}, "description": {Type: "textarea"}}, Settings: map[string]Field{"variant": {Type: "enum", Default: "default", Options: []string{"default", "brand"}}}}, "hero")
 	register(Definition{ID: "core.container", Name: "Container", Version: 1, Category: "layout", Props: map[string]Field{}, Settings: map[string]Field{}, AllowsChildren: true}, "container")
+	register(Definition{ID: "core.image", Name: "Image", Version: 1, Category: "media", Props: map[string]Field{"media": {Type: "media", Required: true}, "alt": {Type: "text"}, "caption": {Type: "text"}}, Settings: map[string]Field{"size": {Type: "enum", Default: "default", Options: []string{"default", "wide", "full"}}}}, "image")
 	return r
 }
 func templateRenderer(name string, definition Definition) Renderer {

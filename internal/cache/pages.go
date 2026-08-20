@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,11 +22,15 @@ type Entry struct {
 	Path         string    `json:"path"`
 	HTML         []byte    `json:"-"`
 	ETag         string    `json:"etag"`
+	HTMLHash     string    `json:"html_hash"`
 	CreatedAt    time.Time `json:"created_at"`
 	Dependencies []string  `json:"dependencies"`
 }
 
-type Pages struct{ dir string }
+type Pages struct {
+	dir string
+	mu  sync.Mutex
+}
 
 func New(dataDir string) (*Pages, error) {
 	dir := filepath.Join(dataDir, "cache", "pages")
@@ -55,6 +60,8 @@ func (p *Pages) names(requestPath string) (string, string, string, error) {
 	return n, base + ".html", base + ".json", nil
 }
 func (p *Pages) Get(requestPath string) (Entry, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	n, htmlName, metaName, err := p.names(requestPath)
 	if err != nil {
 		return Entry{}, false
@@ -64,7 +71,7 @@ func (p *Pages) Get(requestPath string) (Entry, bool) {
 		return Entry{}, false
 	}
 	var entry Entry
-	if err := json.Unmarshal(meta, &entry); err != nil || entry.Path != n || entry.ETag == "" {
+	if err := json.Unmarshal(meta, &entry); err != nil || entry.Path != n || entry.ETag == "" || entry.HTMLHash == "" {
 		_ = os.Remove(metaName)
 		_ = os.Remove(htmlName)
 		return Entry{}, false
@@ -75,10 +82,18 @@ func (p *Pages) Get(requestPath string) (Entry, bool) {
 		_ = os.Remove(htmlName)
 		return Entry{}, false
 	}
+	hash := sha256.Sum256(html)
+	if entry.HTMLHash != hex.EncodeToString(hash[:]) {
+		_ = os.Remove(metaName)
+		_ = os.Remove(htmlName)
+		return Entry{}, false
+	}
 	entry.HTML = html
 	return entry, true
 }
 func (p *Pages) Put(entry Entry) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	n, htmlName, metaName, err := p.names(entry.Path)
 	if err != nil {
 		return err
@@ -87,15 +102,18 @@ func (p *Pages) Put(entry Entry) error {
 		return errors.New("invalid cached HTML size")
 	}
 	entry.Path = n
+	hash := sha256.Sum256(entry.HTML)
+	entry.HTMLHash = hex.EncodeToString(hash[:])
 	if entry.CreatedAt.IsZero() {
 		entry.CreatedAt = time.Now().UTC()
 	}
 	meta, err := json.Marshal(struct {
 		Path         string    `json:"path"`
 		ETag         string    `json:"etag"`
+		HTMLHash     string    `json:"html_hash"`
 		CreatedAt    time.Time `json:"created_at"`
 		Dependencies []string  `json:"dependencies"`
-	}{entry.Path, entry.ETag, entry.CreatedAt, entry.Dependencies})
+	}{entry.Path, entry.ETag, entry.HTMLHash, entry.CreatedAt, entry.Dependencies})
 	if err != nil {
 		return fmt.Errorf("marshal cache metadata: %w", err)
 	}
@@ -130,6 +148,11 @@ func atomicWrite(name string, data []byte) error {
 	return nil
 }
 func (p *Pages) InvalidatePath(requestPath string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.invalidatePath(requestPath)
+}
+func (p *Pages) invalidatePath(requestPath string) error {
 	_, htmlName, metaName, err := p.names(requestPath)
 	if err != nil {
 		return err
@@ -142,6 +165,8 @@ func (p *Pages) InvalidatePath(requestPath string) error {
 	return nil
 }
 func (p *Pages) InvalidateTag(tag string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	files, err := filepath.Glob(filepath.Join(p.dir, "*.json"))
 	if err != nil {
 		return err
@@ -154,11 +179,12 @@ func (p *Pages) InvalidateTag(tag string) error {
 		var entry Entry
 		if json.Unmarshal(data, &entry) != nil {
 			_ = os.Remove(name)
+			_ = os.Remove(strings.TrimSuffix(name, ".json") + ".html")
 			continue
 		}
 		for _, dep := range entry.Dependencies {
 			if dep == tag {
-				if err := p.InvalidatePath(entry.Path); err != nil {
+				if err := p.invalidatePath(entry.Path); err != nil {
 					return err
 				}
 				break
@@ -168,6 +194,8 @@ func (p *Pages) InvalidateTag(tag string) error {
 	return nil
 }
 func (p *Pages) Clear() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	files, err := filepath.Glob(filepath.Join(p.dir, "*"))
 	if err != nil {
 		return err

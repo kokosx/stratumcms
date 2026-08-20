@@ -6,10 +6,11 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/kokosx/stratumcms/internal/authorization"
 	"github.com/kokosx/stratumcms/internal/content"
 )
 
-type userView struct{ ID, DisplayName string }
+type userView struct{ ID, DisplayName, Role string }
 type adminListData struct {
 	User                      userView
 	CSRFToken, Kind, Singular string
@@ -31,8 +32,34 @@ func (h *handler) requireAuth(next http.Handler) http.Handler {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey{}, userView{ID: u.ID, DisplayName: u.DisplayName})))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey{}, userView{ID: u.ID, DisplayName: u.DisplayName, Role: u.Role})))
 	})
+}
+func (h *handler) requireCapability(capability authorization.Capability, next http.Handler) http.Handler {
+	return h.requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !authorization.Allows(currentUser(r).Role, capability) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+func (h *handler) requireEntryAccess(next http.Handler) http.Handler {
+	return h.requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u := currentUser(r)
+		if u.Role == "author" {
+			entry, err := h.content.GetEntry(r.Context(), r.PathValue("id"))
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			if entry.Kind != "post" || entry.AuthorID != u.ID {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	}))
 }
 func currentUser(r *http.Request) userView {
 	u, _ := r.Context().Value(userContextKey{}).(userView)
@@ -45,7 +72,17 @@ func (h *handler) entries(kind string) http.HandlerFunc {
 			h.internalError(w, err)
 			return
 		}
-		h.render(w, "admin_list", adminListData{User: currentUser(r), CSRFToken: h.csrfToken(w, r), Kind: kind, Singular: label(kind), Entries: items})
+		user := currentUser(r)
+		if user.Role == "author" {
+			owned := items[:0]
+			for _, item := range items {
+				if item.AuthorID == user.ID {
+					owned = append(owned, item)
+				}
+			}
+			items = owned
+		}
+		h.render(w, "admin_list", adminListData{User: user, CSRFToken: h.csrfToken(w, r), Kind: kind, Singular: label(kind), Entries: items})
 	}
 }
 func (h *handler) newEntry(kind string) http.HandlerFunc {
