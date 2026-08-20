@@ -1,0 +1,4 @@
+{{define "admin_head"}}<!doctype html><html><head><meta charset="utf-8"><title>Stratum</title><link rel="stylesheet" href="/static/app.css"></head><body class="admin">{{end}}
+{{define "admin_topbar"}}<header class="topbar"><strong>Stratum</strong><a href="/">View Site</a><span class="spacer"></span><span>{{.User.DisplayName}}</span><form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="link">Logout</button></form></header>{{end}}
+{{define "admin_sidebar"}}<nav><a href="/admin">Dashboard</a><a href="/admin/posts">Posts</a><a href="/admin/pages">Pages</a><a>Media</a><a>Appearance</a><a>Blocks</a><a>Users</a><a>Tools</a><a>Settings</a></nav>{{end}}
+{{define "admin_end"}}</div></body></html>{{end}}

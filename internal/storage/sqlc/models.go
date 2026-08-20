@@ -4,6 +4,8 @@
 
 package sqlc
 
+import "database/sql"
+
 type Installation struct {
 	ID        int64
 	CreatedAt string
@@ -32,4 +34,22 @@ type User struct {
 	Role         string
 	CreatedAt    string
 	UpdatedAt    string
+}
+
+type ContentType struct{ ID, Handle, Name, SchemaJson, CreatedAt, UpdatedAt string }
+type Entry struct {
+	ID, ContentTypeID, Title, Slug, Status, AuthorID string
+	ParentID, PublishedRevisionID                    sql.NullString
+	CreatedAt, UpdatedAt                             string
+	PublishedAt                                      sql.NullString
+}
+type Revision struct {
+	ID, EntryID                               string
+	Number                                    int64
+	Title, DocumentJson, CreatedBy, CreatedAt string
+}
+type Route struct {
+	ID, Path, ResourceType, ResourceID string
+	Canonical                          int64
+	CreatedAt, UpdatedAt               string
 }

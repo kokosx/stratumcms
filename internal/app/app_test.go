@@ -35,6 +35,15 @@ func TestUnauthenticatedAdminRedirectsToLogin(t *testing.T) {
 	}
 }
 
+func TestUnauthenticatedPagesRedirectToLogin(t *testing.T) {
+	s := testServer(t)
+	defer s.Close()
+	resp := get(t, testClient(t), s.URL+"/admin/pages")
+	if resp.Request.URL.Path != "/login" {
+		t.Fatalf("pages ended at %s", resp.Request.URL.Path)
+	}
+}
+
 func TestLoginAndLogout(t *testing.T) {
 	s := testServer(t)
 	defer s.Close()
@@ -50,6 +59,15 @@ func TestLoginAndLogout(t *testing.T) {
 	if resp.Request.URL.Path != "/admin" {
 		t.Fatalf("login ended at %s", resp.Request.URL.Path)
 	}
+}
+
+func TestEmailLoginIsCaseInsensitive(t *testing.T) {
+	s := testServer(t)
+	defer s.Close()
+	client := testClient(t)
+	setup(t, client, s.URL, "admin@example.test", "admin")
+	logout(t, client, s.URL)
+	login(t, client, s.URL, "ADMIN@EXAMPLE.TEST", "a long test password")
 }
 
 func testServer(t *testing.T) *httptest.Server {

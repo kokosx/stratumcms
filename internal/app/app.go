@@ -16,6 +16,7 @@ import (
 
 	"github.com/kokosx/stratumcms/internal/auth"
 	"github.com/kokosx/stratumcms/internal/config"
+	"github.com/kokosx/stratumcms/internal/content"
 	"github.com/kokosx/stratumcms/internal/migrations"
 	"github.com/kokosx/stratumcms/internal/platform"
 	store "github.com/kokosx/stratumcms/internal/storage/sqlc"
@@ -82,7 +83,7 @@ func NewHandler(db *sql.DB, logger *slog.Logger, cfg config.Config) http.Handler
 	if err != nil {
 		panic(fmt.Sprintf("parse embedded templates: %v", err))
 	}
-	h := &handler{auth: newAuthService(db), templates: templates, logger: logger, secureCookies: cfg.SecureCookies}
+	h := &handler{auth: newAuthService(db), content: content.New(db), templates: templates, logger: logger, secureCookies: cfg.SecureCookies}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /static/app.css", css)
@@ -91,7 +92,17 @@ func NewHandler(db *sql.DB, logger *slog.Logger, cfg config.Config) http.Handler
 	mux.HandleFunc("GET /login", h.loginForm)
 	mux.HandleFunc("POST /login", h.login)
 	mux.HandleFunc("POST /logout", h.logout)
-	mux.HandleFunc("GET /admin", h.admin)
+	mux.Handle("GET /admin", h.requireAuth(http.HandlerFunc(h.admin)))
+	mux.Handle("GET /admin/posts", h.requireAuth(http.HandlerFunc(h.entries("post"))))
+	mux.Handle("GET /admin/posts/new", h.requireAuth(http.HandlerFunc(h.newEntry("post"))))
+	mux.Handle("POST /admin/posts", h.requireAuth(http.HandlerFunc(h.createEntry("post"))))
+	mux.Handle("GET /admin/posts/{id}/edit", h.requireAuth(http.HandlerFunc(h.editEntry("post"))))
+	mux.Handle("POST /admin/posts/{id}", h.requireAuth(http.HandlerFunc(h.updateEntry("post"))))
+	mux.Handle("GET /admin/pages", h.requireAuth(http.HandlerFunc(h.entries("page"))))
+	mux.Handle("GET /admin/pages/new", h.requireAuth(http.HandlerFunc(h.newEntry("page"))))
+	mux.Handle("POST /admin/pages", h.requireAuth(http.HandlerFunc(h.createEntry("page"))))
+	mux.Handle("GET /admin/pages/{id}/edit", h.requireAuth(http.HandlerFunc(h.editEntry("page"))))
+	mux.Handle("POST /admin/pages/{id}", h.requireAuth(http.HandlerFunc(h.updateEntry("page"))))
 	return h.securityHeaders(h.requestLog(mux))
 }
 
@@ -102,13 +113,14 @@ func health(w http.ResponseWriter, _ *http.Request) {
 
 type handler struct {
 	auth          *authService
+	content       *content.Service
 	templates     *template.Template
 	logger        *slog.Logger
 	secureCookies bool
 }
 type formData struct {
 	CSRFToken, Error, Email, Username, DisplayName, Login string
-	User                                                  store.User
+	User                                                  userView
 }
 
 const sessionCookie = "stratum_session"
@@ -193,12 +205,7 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 func (h *handler) admin(w http.ResponseWriter, r *http.Request) {
-	user, ok := h.user(r)
-	if !ok {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
-	}
-	h.render(w, "admin", formData{User: user, CSRFToken: h.csrfToken(w, r)})
+	h.render(w, "admin", formData{User: currentUser(r), CSRFToken: h.csrfToken(w, r)})
 }
 
 func (h *handler) user(r *http.Request) (store.User, bool) {
@@ -210,7 +217,7 @@ func (h *handler) user(r *http.Request) (store.User, bool) {
 	return user, err == nil
 }
 func (h *handler) loggedIn(r *http.Request) bool { _, ok := h.user(r); return ok }
-func (h *handler) render(w http.ResponseWriter, name string, data formData) {
+func (h *handler) render(w http.ResponseWriter, name string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.templates.ExecuteTemplate(w, name, data); err != nil {
 		h.logger.Error("render template", "error", err)
@@ -265,7 +272,10 @@ func (h *handler) requestLog(next http.Handler) http.Handler {
 func (h *handler) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		if r.URL.Path == "/setup" || r.URL.Path == "/login" || r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		w.Header().Set("Referrer-Policy", "same-origin")
 		next.ServeHTTP(w, r)
 	})

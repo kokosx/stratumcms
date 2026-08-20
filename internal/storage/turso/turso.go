@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	_ "turso.tech/database/tursogo"
+	turso "turso.tech/database/tursogo"
 )
 
 // Open opens the local Turso database stored in dataDir.
@@ -20,13 +20,22 @@ func Open(ctx context.Context, dataDir string) (db *sql.DB, err error) {
 		}
 	}()
 
-	db, err = sql.Open("turso", filepath.Join(dataDir, "stratum.db"))
+	connector, err := turso.NewConnector(filepath.Join(dataDir, "stratum.db"))
 	if err != nil {
-		return nil, fmt.Errorf("open Turso database: %w", err)
+		return nil, fmt.Errorf("configure Turso database: %w", err)
 	}
+	db = sql.OpenDB(connector)
+	// tursogo has no per-connection initialization callback. SQLite pragmas are
+	// connection-local, therefore the pool is constrained to its initialized connection.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialize Turso database: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 	return db, nil
 }

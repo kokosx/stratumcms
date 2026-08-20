@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kokosx/stratumcms/internal/auth"
+	"github.com/kokosx/stratumcms/internal/id"
 	store "github.com/kokosx/stratumcms/internal/storage/sqlc"
 )
 
@@ -44,14 +45,17 @@ func (s *authService) setup(ctx context.Context, input setupInput) (string, erro
 	defer tx.Rollback()
 	now := s.now().UTC()
 	q := s.queries.WithTx(tx)
-	if _, err := tx.ExecContext(ctx, "INSERT INTO installation (id, created_at) VALUES (1, ?)", timestamp(now)); err != nil {
-		return "", ErrSetupComplete
+	if err := q.CreateInstallation(ctx, timestamp(now)); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "installation.id") || strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return "", ErrSetupComplete
+		}
+		return "", fmt.Errorf("create installation: %w", err)
 	}
-	userID, err := auth.NewToken()
+	userID, err := id.New()
 	if err != nil {
 		return "", fmt.Errorf("generate user id: %w", err)
 	}
-	if err := q.CreateUser(ctx, store.CreateUserParams{ID: userID, Email: strings.ToLower(strings.TrimSpace(input.Email)), Username: strings.TrimSpace(input.Username), PasswordHash: hash, DisplayName: strings.TrimSpace(input.DisplayName), Role: "administrator", CreatedAt: timestamp(now), UpdatedAt: timestamp(now)}); err != nil {
+	if err := q.CreateUser(ctx, store.CreateUserParams{ID: userID, Email: normalizeLogin(input.Email), Username: normalizeLogin(input.Username), PasswordHash: hash, DisplayName: strings.TrimSpace(input.DisplayName), Role: "administrator", CreatedAt: timestamp(now), UpdatedAt: timestamp(now)}); err != nil {
 		return "", fmt.Errorf("create administrator: %w", err)
 	}
 	token, err := s.createSession(ctx, q, userID, now)
@@ -65,8 +69,14 @@ func (s *authService) setup(ctx context.Context, input setupInput) (string, erro
 }
 
 func (s *authService) login(ctx context.Context, login, password string) (string, error) {
-	login = strings.TrimSpace(login)
-	user, err := s.queries.GetUserByLogin(ctx, store.GetUserByLoginParams{Email: login, Username: login})
+	login = normalizeLogin(login)
+	var user store.User
+	var err error
+	if strings.Contains(login, "@") {
+		user, err = s.queries.GetUserByEmail(ctx, login)
+	} else {
+		user, err = s.queries.GetUserByUsername(ctx, login)
+	}
 	if err != nil || !auth.VerifyPassword(user.PasswordHash, password) {
 		return "", ErrInvalidCredentials
 	}
@@ -90,7 +100,7 @@ func (s *authService) createSession(ctx context.Context, q *store.Queries, userI
 	if err != nil {
 		return "", fmt.Errorf("generate session token: %w", err)
 	}
-	id, err := auth.NewToken()
+	id, err := id.New()
 	if err != nil {
 		return "", fmt.Errorf("generate session id: %w", err)
 	}
@@ -110,16 +120,20 @@ func (s *authService) logout(ctx context.Context, token string) error {
 	return nil
 }
 func (s *authService) configured(ctx context.Context) (bool, error) {
-	count, err := s.queries.CountUsers(ctx)
-	return count > 0, err
+	configured, err := s.queries.IsConfigured(ctx)
+	return configured, err
 }
 func timestamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 func validateSetup(in setupInput) error {
 	if !strings.Contains(strings.TrimSpace(in.Email), "@") {
 		return errors.New("enter a valid email address")
 	}
-	if len(strings.TrimSpace(in.Username)) < 3 {
+	username := normalizeLogin(in.Username)
+	if len(username) < 3 {
 		return errors.New("username must be at least 3 characters")
+	}
+	if strings.Contains(username, "@") {
+		return errors.New("username cannot contain @")
 	}
 	if strings.TrimSpace(in.DisplayName) == "" {
 		return errors.New("display name is required")
@@ -129,3 +143,5 @@ func validateSetup(in setupInput) error {
 	}
 	return nil
 }
+
+func normalizeLogin(value string) string { return strings.ToLower(strings.TrimSpace(value)) }

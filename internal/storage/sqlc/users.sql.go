@@ -9,17 +9,6 @@ import (
 	"context"
 )
 
-const countUsers = `-- name: CountUsers :one
-SELECT COUNT(*) FROM users
-`
-
-func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countUsers)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const createUser = `-- name: CreateUser :exec
 INSERT INTO users (id, email, username, password_hash, display_name, role, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -50,18 +39,10 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) error {
 	return err
 }
 
-const getUserByLogin = `-- name: GetUserByLogin :one
-SELECT id, email, username, password_hash, display_name, role, created_at, updated_at
-FROM users WHERE email = ? OR username = ? LIMIT 1
-`
+const getUserByEmail = `SELECT id, email, username, password_hash, display_name, role, created_at, updated_at FROM users WHERE email = ? LIMIT 1`
 
-type GetUserByLoginParams struct {
-	Email    string
-	Username string
-}
-
-func (q *Queries) GetUserByLogin(ctx context.Context, arg GetUserByLoginParams) (User, error) {
-	row := q.db.QueryRowContext(ctx, getUserByLogin, arg.Email, arg.Username)
+func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
+	row := q.db.QueryRowContext(ctx, getUserByEmail, email)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -74,6 +55,30 @@ func (q *Queries) GetUserByLogin(ctx context.Context, arg GetUserByLoginParams) 
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getUserByUsername = `SELECT id, email, username, password_hash, display_name, role, created_at, updated_at FROM users WHERE username = ? LIMIT 1`
+
+func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User, error) {
+	row := q.db.QueryRowContext(ctx, getUserByUsername, username)
+	var i User
+	err := row.Scan(&i.ID, &i.Email, &i.Username, &i.PasswordHash, &i.DisplayName, &i.Role, &i.CreatedAt, &i.UpdatedAt)
+	return i, err
+}
+
+const createInstallation = `INSERT INTO installation (id, created_at) VALUES (1, ?)`
+
+func (q *Queries) CreateInstallation(ctx context.Context, createdAt string) error {
+	_, err := q.db.ExecContext(ctx, createInstallation, createdAt)
+	return err
+}
+
+const isConfigured = `SELECT EXISTS(SELECT 1 FROM installation WHERE id = 1)`
+
+func (q *Queries) IsConfigured(ctx context.Context) (bool, error) {
+	var configured bool
+	err := q.db.QueryRowContext(ctx, isConfigured).Scan(&configured)
+	return configured, err
 }
 
 const getUserBySessionTokenHash = `-- name: GetUserBySessionTokenHash :one
