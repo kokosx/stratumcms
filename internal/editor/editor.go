@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -140,6 +141,41 @@ func (s *Service) UpdateBlock(ctx context.Context, entryID, userID string, versi
 	values[field] = value
 	return s.persist(ctx, draft, userID)
 }
+func (s *Service) CoerceValue(ctx context.Context, entryID, nodeID, group, field string, value any) (any, error) {
+	draft, err := s.LoadDraft(ctx, entryID, "")
+	if err != nil {
+		return nil, err
+	}
+	node := documents.Find(draft.Document.Children, nodeID)
+	if node == nil {
+		return nil, fmt.Errorf("%w: node not found", ErrValidation)
+	}
+	def, _, err := s.registry.Resolve(node.Type, node.Version)
+	if err != nil {
+		return nil, fmt.Errorf("%w: unknown block", ErrValidation)
+	}
+	schema := def.Props
+	if group == "settings" {
+		schema = def.Settings
+	}
+	f, ok := schema[field]
+	if !ok {
+		return nil, fmt.Errorf("%w: unknown field", ErrValidation)
+	}
+	if text, ok := value.(string); ok {
+		switch f.Type {
+		case "boolean":
+			value = text == "true" || text == "on"
+		case "integer":
+			n, e := strconv.ParseFloat(text, 64)
+			if e != nil {
+				return nil, fmt.Errorf("%w: integer required", ErrValidation)
+			}
+			value = n
+		}
+	}
+	return value, nil
+}
 
 func (s *Service) DeleteBlock(ctx context.Context, entryID, userID string, version int64, nodeID string) (Draft, error) {
 	draft, err := s.loadVersion(ctx, entryID, userID, version)
@@ -200,16 +236,24 @@ func (s *Service) save(ctx context.Context, entryID, userID string, version int6
 	if err != nil {
 		return Draft{}, err
 	}
-	in := content.Input{Title: draft.Title, Slug: draft.Slug, Document: &draft.Document}
-	if publish {
-		_, err = s.content.PublishEntry(ctx, entryID, userID, in)
-	} else {
-		_, err = s.content.SaveEntry(ctx, entryID, userID, in)
+	if err := s.registry.Validate(draft.Document); err != nil {
+		return Draft{}, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	json, err := documents.Marshal(draft.Document)
+	if err != nil {
+		return Draft{}, err
+	}
+	_, err = s.content.SaveEntryWithDraft(ctx, entryID, userID, content.Input{Title: draft.Title, Slug: draft.Slug, Document: &draft.Document}, content.DraftUpdate{Title: draft.Title, Slug: draft.Slug, DocumentJSON: string(json), UpdatedBy: userID, Version: version}, publish)
+	if errors.Is(err, content.ErrConflict) {
+		return Draft{}, ErrConflict
 	}
 	if err != nil {
 		return Draft{}, fmt.Errorf("%w: %v", ErrValidation, err)
 	}
-	return s.persist(ctx, draft, userID)
+	draft.Version++
+	draft.UpdatedBy = userID
+	draft.UpdatedAt = s.now().UTC().Format(time.RFC3339Nano)
+	return draft, nil
 }
 
 func (s *Service) loadVersion(ctx context.Context, entryID, userID string, version int64) (Draft, error) {

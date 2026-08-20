@@ -23,6 +23,8 @@ import (
 	"github.com/kokosx/stratumcms/internal/renderer"
 	store "github.com/kokosx/stratumcms/internal/storage/sqlc"
 	"github.com/kokosx/stratumcms/internal/storage/turso"
+	"github.com/kokosx/stratumcms/internal/styles"
+	"github.com/kokosx/stratumcms/internal/themes"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -86,11 +88,16 @@ func NewHandler(db *sql.DB, logger *slog.Logger, cfg config.Config) http.Handler
 		panic(fmt.Sprintf("parse embedded templates: %v", err))
 	}
 	contentService := content.New(db)
-	publicTemplate := template.Must(template.New("public").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>{{.Title}}</title></head><body><main>{{.Content}}</main></body></html>`))
-	h := &handler{auth: newAuthService(db), content: contentService, editor: editor.New(db, contentService), renderer: renderer.New(contentService.Registry()), templates: templates, publicTemplate: publicTemplate, logger: logger, secureCookies: cfg.SecureCookies}
+	themeRegistry, err := themes.NewRegistry()
+	if err != nil {
+		panic(fmt.Sprintf("load themes: %v", err))
+	}
+	h := &handler{auth: newAuthService(db), content: contentService, editor: editor.New(db, contentService), renderer: renderer.New(contentService.Registry()), styles: styles.New(store.New(db)), themes: themeRegistry, templates: templates, logger: logger, secureCookies: cfg.SecureCookies}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /static/app.css", css)
+	mux.HandleFunc("GET /assets/site.css", h.siteCSS)
+	mux.HandleFunc("GET /assets/themes/{theme}/{asset}", h.themeAsset)
 	mux.HandleFunc("GET /static/editor.css", editorCSS)
 	mux.HandleFunc("GET /static/datastar-1.0.0.js", datastarJS)
 	mux.HandleFunc("GET /setup", h.setupForm)
@@ -103,12 +110,14 @@ func NewHandler(db *sql.DB, logger *slog.Logger, cfg config.Config) http.Handler
 	mux.Handle("GET /admin/posts/new", h.requireAuth(http.HandlerFunc(h.newEntry("post"))))
 	mux.Handle("POST /admin/posts", h.requireAuth(http.HandlerFunc(h.createEntry("post"))))
 	mux.Handle("GET /admin/posts/{id}/edit", h.requireAuth(http.HandlerFunc(h.editEntry("post"))))
-	mux.Handle("POST /admin/posts/{id}", h.requireAuth(http.HandlerFunc(h.updateEntry("post"))))
 	mux.Handle("GET /admin/pages", h.requireAuth(http.HandlerFunc(h.entries("page"))))
 	mux.Handle("GET /admin/pages/new", h.requireAuth(http.HandlerFunc(h.newEntry("page"))))
 	mux.Handle("POST /admin/pages", h.requireAuth(http.HandlerFunc(h.createEntry("page"))))
 	mux.Handle("GET /admin/pages/{id}/edit", h.requireAuth(http.HandlerFunc(h.editEntry("page"))))
-	mux.Handle("POST /admin/pages/{id}", h.requireAuth(http.HandlerFunc(h.updateEntry("page"))))
+	mux.Handle("GET /admin/appearance/themes", h.requireAuth(http.HandlerFunc(h.appearanceThemes)))
+	mux.Handle("POST /admin/appearance/themes", h.requireAuth(http.HandlerFunc(h.saveTheme)))
+	mux.Handle("GET /admin/appearance/styles", h.requireAuth(http.HandlerFunc(h.appearanceStyles)))
+	mux.Handle("POST /admin/appearance/styles", h.requireAuth(http.HandlerFunc(h.saveStyles)))
 	mux.Handle("GET /admin/editor/{id}", h.requireAuth(http.HandlerFunc(h.editorPage(""))))
 	mux.Handle("GET /admin/editor/{id}/preview", h.requireAuth(http.HandlerFunc(h.editorPreview)))
 	mux.Handle("POST /admin/editor/{id}/blocks", h.requireAuth(http.HandlerFunc(h.editorAddBlock)))
@@ -129,18 +138,19 @@ func health(w http.ResponseWriter, _ *http.Request) {
 }
 
 type handler struct {
-	auth           *authService
-	content        *content.Service
-	editor         *editor.Service
-	renderer       *renderer.Renderer
-	templates      *template.Template
-	publicTemplate *template.Template
-	logger         *slog.Logger
-	secureCookies  bool
+	auth          *authService
+	content       *content.Service
+	editor        *editor.Service
+	renderer      *renderer.Renderer
+	templates     *template.Template
+	styles        *styles.Service
+	themes        *themes.Registry
+	logger        *slog.Logger
+	secureCookies bool
 }
 
 func (h *handler) public(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/admin/") || strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/login" || r.URL.Path == "/setup" || r.URL.Path == "/health" {
+	if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/admin/") || strings.HasPrefix(r.URL.Path, "/static/") || strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Path == "/login" || r.URL.Path == "/setup" || r.URL.Path == "/health" {
 		http.NotFound(w, r)
 		return
 	}
@@ -159,13 +169,7 @@ func (h *handler) public(w http.ResponseWriter, r *http.Request) {
 		h.internalError(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.publicTemplate.Execute(w, struct {
-		Title   string
-		Content template.HTML
-	}{published.Title, body}); err != nil {
-		h.logger.Error("render public template", "error", err)
-	}
+	h.renderPresentation(w, r, published.Kind, published.Title, body)
 }
 
 type formData struct {

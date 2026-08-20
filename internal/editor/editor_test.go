@@ -49,3 +49,56 @@ func TestDraftMutationAndVersionConflict(t *testing.T) {
 		t.Fatalf("duplicate=%#v err=%v", duplicated, err)
 	}
 }
+
+func TestSaveDraftConflictCreatesNoRevision(t *testing.T) {
+	ctx := context.Background()
+	db, err := turso.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	q := store.New(db)
+	if err := q.CreateUser(ctx, store.CreateUserParams{ID: "author", Email: "author@example.test", Username: "author", PasswordHash: "hash", DisplayName: "Author", Role: "administrator", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	c := content.New(db)
+	entry, err := c.CreateEntry(ctx, "page", "author", content.Input{Title: "About"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(db, c)
+	draft, err := s.LoadDraft(ctx, entry.ID, "author")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.SaveDraft(ctx, entry.ID, "author", draft.Version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.SaveDraft(ctx, entry.ID, "author", draft.Version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale save error=%v", err)
+	}
+	var count int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM revisions WHERE entry_id=?", entry.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("revisions=%d, want 2", count)
+	}
+	current, err := s.LoadDraft(ctx, entry.ID, "author")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Publish(ctx, entry.ID, "author", current.Version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM revisions WHERE entry_id=?", entry.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("revisions after publish=%d, want 3", count)
+	}
+}

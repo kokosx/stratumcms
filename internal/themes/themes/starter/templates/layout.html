@@ -1,0 +1,4 @@
+{{define "layout"}}<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Title}}</title>
+<link rel="stylesheet" href="{{.ThemeStyles}}"><link rel="stylesheet" href="{{.SiteStyles}}"></head>
+<body><main class="stratum-container">{{template "content" .}}</main></body></html>{{end}}

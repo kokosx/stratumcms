@@ -128,7 +128,7 @@ func TestPublicRouteUsesPublishedRevisionAndAdminKindIsEnforced(t *testing.T) {
 		t.Fatalf("post URL could edit page: %d", wrongKind.StatusCode)
 	}
 	token = csrf(t, client, s.URL+"/admin/pages/"+pageID+"/edit")
-	published := post(t, client, s.URL+"/admin/pages/"+pageID, url.Values{"csrf_token": {token}, "title": {"About"}, "slug": {"about"}, "action": {"publish"}})
+	published := post(t, client, s.URL+"/admin/editor/"+pageID+"/publish", url.Values{"csrf_token": {token}, "version": {"1"}})
 	if published.Request.URL.Path != "/admin/pages/"+pageID+"/edit" {
 		t.Fatalf("publish ended at %s", published.Request.URL.Path)
 	}
@@ -142,6 +142,17 @@ func TestPublicRouteUsesPublishedRevisionAndAdminKindIsEnforced(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "<title>About</title>") {
 		t.Fatalf("missing public layout title: %s", body)
+	}
+	if !strings.Contains(string(body), "/assets/themes/starter/theme.css") || !strings.Contains(string(body), "/assets/site.css?v=") {
+		t.Fatalf("public page is not using the presentation pipeline: %s", body)
+	}
+	preview := get(t, client, s.URL+"/admin/editor/"+pageID+"/preview")
+	previewBody, err := io.ReadAll(preview.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(previewBody), "/assets/themes/starter/theme.css") || !strings.Contains(string(previewBody), "/assets/site.css?v=") {
+		t.Fatalf("preview is not using the presentation pipeline: %s", previewBody)
 	}
 }
 

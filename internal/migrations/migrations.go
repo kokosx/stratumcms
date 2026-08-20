@@ -23,6 +23,7 @@ var all = []Migration{
 	{Version: 2, Name: "users_and_sessions", SQL: mustRead("sql/002_users_and_sessions.sql")},
 	{Version: 3, Name: "content", SQL: mustRead("sql/003_content.sql")},
 	{Version: 4, Name: "entry_drafts", SQL: mustRead("sql/004_entry_drafts.sql")},
+	{Version: 5, Name: "site_presentation", SQL: mustRead("sql/005_site_presentation.sql")},
 }
 
 // Run applies migrations not yet recorded in schema_migrations.

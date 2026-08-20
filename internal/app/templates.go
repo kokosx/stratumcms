@@ -10,7 +10,21 @@ import (
 var webFiles embed.FS
 
 func parseTemplates() (*template.Template, error) {
-	return template.ParseFS(webFiles, "web/templates/*.html")
+	return template.New("root").Funcs(template.FuncMap{"fontOptions": fontOptions}).ParseFS(webFiles, "web/templates/*.html")
+}
+
+type fontOption struct {
+	Value    string
+	Selected bool
+}
+
+func fontOptions(selected string) []fontOption {
+	names := []string{"system", "sans", "serif", "mono"}
+	out := make([]fontOption, 0, len(names))
+	for _, name := range names {
+		out = append(out, fontOption{name, name == selected})
+	}
+	return out
 }
 func css(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")

@@ -17,6 +17,7 @@ import (
 )
 
 var ErrValidation = errors.New("content validation")
+var ErrConflict = errors.New("content conflict")
 
 type Service struct {
 	db       *sql.DB
@@ -44,9 +45,13 @@ type Input struct {
 	Title, Slug string
 	Document    *documents.Document
 }
+type DraftUpdate struct {
+	Title, Slug, DocumentJSON, UpdatedBy string
+	Version                              int64
+}
 type Published struct {
-	Title    string
-	Document documents.Document
+	Title, Kind string
+	Document    documents.Document
 }
 
 func Slug(value string) string {
@@ -75,6 +80,31 @@ func (s *Service) PublishEntry(ctx context.Context, entryID, authorID string, in
 	return s.write(ctx, entryID, "", authorID, in, "published", true, false)
 }
 
+// SaveEntryWithDraft writes a revision and advances the editor draft in one transaction.
+func (s *Service) SaveEntryWithDraft(ctx context.Context, entryID, authorID string, in Input, draft DraftUpdate, publish bool) (Entry, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Entry{}, fmt.Errorf("begin editor save: %w", err)
+	}
+	defer tx.Rollback()
+	q := s.queries.WithTx(tx)
+	changed, err := q.UpdateEntryDraft(ctx, store.UpdateEntryDraftParams{Title: draft.Title, Slug: draft.Slug, DocumentJson: draft.DocumentJSON, UpdatedBy: draft.UpdatedBy, UpdatedAt: s.now().UTC().Format(time.RFC3339Nano), EntryID: entryID, Version: draft.Version})
+	if err != nil {
+		return Entry{}, fmt.Errorf("advance editor draft: %w", err)
+	}
+	if changed != 1 {
+		return Entry{}, ErrConflict
+	}
+	entry, err := s.writeTx(ctx, q, entryID, "", authorID, in, publish, false)
+	if err != nil {
+		return Entry{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Entry{}, fmt.Errorf("commit editor save: %w", err)
+	}
+	return entry, nil
+}
+
 func (s *Service) write(ctx context.Context, entryID, handle, authorID string, in Input, status string, publish, create bool) (Entry, error) {
 	in.Title = strings.TrimSpace(in.Title)
 	in.Slug = Slug(in.Slug)
@@ -90,6 +120,17 @@ func (s *Service) write(ctx context.Context, entryID, handle, authorID string, i
 	}
 	defer tx.Rollback()
 	q := s.queries.WithTx(tx)
+	entry, err := s.writeTx(ctx, q, entryID, handle, authorID, in, publish, create)
+	if err != nil {
+		return Entry{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return Entry{}, fmt.Errorf("commit content write: %w", err)
+	}
+	return entry, nil
+}
+func (s *Service) writeTx(ctx context.Context, q *store.Queries, entryID, handle, authorID string, in Input, publish, create bool) (Entry, error) {
+	status := "draft"
 	now := s.now().UTC()
 	nowText := now.Format(time.RFC3339Nano)
 	var dbEntry store.Entry
@@ -106,9 +147,10 @@ func (s *Service) write(ctx context.Context, entryID, handle, authorID string, i
 		}
 		dbEntry = store.Entry{ID: entryID, ContentTypeID: typeID, AuthorID: authorID, CreatedAt: nowText}
 	} else {
-		dbEntry, err = q.GetEntry(ctx, entryID)
-		if err != nil {
-			return Entry{}, fmt.Errorf("get entry: %w", err)
+		var e error
+		dbEntry, e = q.GetEntry(ctx, entryID)
+		if e != nil {
+			return Entry{}, fmt.Errorf("get entry: %w", e)
 		}
 		typeID = dbEntry.ContentTypeID
 	}
@@ -170,9 +212,6 @@ func (s *Service) write(ctx context.Context, entryID, handle, authorID string, i
 			return Entry{}, fmt.Errorf("get entry route: %w", routeErr)
 		}
 		path = route.Path
-	}
-	if err = tx.Commit(); err != nil {
-		return Entry{}, fmt.Errorf("commit content write: %w", err)
 	}
 	return Entry{ID: entryID, Title: in.Title, Slug: in.Slug, Status: entryStatus, Route: path, UpdatedAt: nowText, PublishedRevisionID: publishedID.String}, nil
 }
@@ -244,7 +283,13 @@ func (s *Service) ResolvePublished(ctx context.Context, path string) (Published,
 	if err := s.registry.Validate(document); err != nil {
 		return Published{}, fmt.Errorf("validate published document: %w", err)
 	}
-	return Published{Title: row.Title_2, Document: document}, nil
+	return Published{Title: row.Title_2, Kind: entryKind(row.ContentTypeID), Document: document}, nil
+}
+func entryKind(typeID string) string {
+	if typeID == "content_type_post" {
+		return "post"
+	}
+	return "page"
 }
 func (s *Service) ListEntries(ctx context.Context, handle string) ([]Entry, error) {
 	ct, err := s.queries.GetContentTypeByHandle(ctx, handle)

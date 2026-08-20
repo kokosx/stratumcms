@@ -2,10 +2,8 @@ package app
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"html/template"
 	"net/http"
 	"strconv"
@@ -82,13 +80,7 @@ func (h *handler) editorPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.publicTemplate.Execute(w, struct {
-		Title   string
-		Content template.HTML
-	}{draft.Title, body}); err != nil {
-		h.internalError(w, err)
-	}
+	h.renderPresentation(w, r, draft.Kind, draft.Title, body)
 }
 
 func (h *handler) editorAddBlock(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +90,7 @@ func (h *handler) editorAddBlock(w http.ResponseWriter, r *http.Request) {
 }
 func (h *handler) editorUpdateBlock(w http.ResponseWriter, r *http.Request) {
 	h.editorMutation(w, r, "Draft updated", func(v editorValues) (editor.Draft, error) {
-		value, err := h.coerceEditorValue(r.PathValue("id"), r.PathValue("nodeID"), v.group, v.field, v.value)
+		value, err := h.editor.CoerceValue(r.Context(), r.PathValue("id"), r.PathValue("nodeID"), v.group, v.field, v.value)
 		if err != nil {
 			return editor.Draft{}, err
 		}
@@ -267,41 +259,6 @@ func readEditorValues(r *http.Request) (editorValues, error) {
 	v.blockVersion, _ = strconv.Atoi(r.FormValue("block_version"))
 	v.value = r.FormValue("value")
 	return v, nil
-}
-func (h *handler) coerceEditorValue(entryID, nodeID, group, field string, value any) (any, error) {
-	draft, err := h.editor.LoadDraft(context.Background(), entryID, "")
-	if err != nil {
-		return nil, err
-	}
-	node := documents.Find(draft.Document.Children, nodeID)
-	if node == nil {
-		return nil, fmt.Errorf("%w: node not found", editor.ErrValidation)
-	}
-	def, _, err := h.editor.Registry().Resolve(node.Type, node.Version)
-	if err != nil {
-		return nil, fmt.Errorf("%w: unknown block", editor.ErrValidation)
-	}
-	schema := def.Props
-	if group == "settings" {
-		schema = def.Settings
-	}
-	fieldDef, ok := schema[field]
-	if !ok {
-		return nil, fmt.Errorf("%w: unknown field", editor.ErrValidation)
-	}
-	if text, ok := value.(string); ok {
-		switch fieldDef.Type {
-		case "boolean":
-			value = text == "true" || text == "on"
-		case "integer":
-			n, e := strconv.ParseFloat(text, 64)
-			if e != nil {
-				return nil, fmt.Errorf("%w: integer required", editor.ErrValidation)
-			}
-			value = n
-		}
-	}
-	return value, nil
 }
 func (h *handler) patchEditorStatus(w http.ResponseWriter, r *http.Request, message string, failed bool) {
 	class := "editor-status"
