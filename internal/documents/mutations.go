@@ -67,6 +67,17 @@ func MoveNode(document *Document, id, parentID string, index int) error {
 	if id == parentID || (parentID != "" && contains(Find(document.Children, id), parentID)) {
 		return fmt.Errorf("cannot move a node into its own subtree")
 	}
+	// Work on a copy so a rejected move never leaves a partially changed
+	// in-memory document behind.
+	copy := cloneDocument(*document)
+	if err := moveNode(&copy, id, parentID, index); err != nil {
+		return err
+	}
+	*document = copy
+	return nil
+}
+
+func moveNode(document *Document, id, parentID string, index int) error {
 	var node Node
 	if err := remove(document, id, &node); err != nil {
 		return err
@@ -159,11 +170,31 @@ func cloneWithIDs(node Node, newID func() (string, error)) (Node, error) {
 	return node, nil
 }
 func copyMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
 	out := make(map[string]any, len(in))
 	for key, value := range in {
 		out[key] = value
 	}
 	return out
+}
+func cloneDocument(document Document) Document {
+	var clone func([]Node) []Node
+	clone = func(nodes []Node) []Node {
+		if nodes == nil {
+			return nil
+		}
+		out := make([]Node, len(nodes))
+		for i, node := range nodes {
+			out[i] = node
+			out[i].Props = copyMap(node.Props)
+			out[i].Settings = copyMap(node.Settings)
+			out[i].Children = clone(node.Children)
+		}
+		return out
+	}
+	return Document{Version: document.Version, Children: clone(document.Children)}
 }
 func contains(node *Node, id string) bool {
 	if node == nil {

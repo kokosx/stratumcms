@@ -37,11 +37,11 @@ func TestDraftMutationAndVersionConflict(t *testing.T) {
 		t.Fatalf("draft=%#v err=%v", draft, err)
 	}
 	stale := draft.Version
-	draft, err = s.AddBlock(ctx, entry.ID, "author", draft.Version, "", "core.text")
+	draft, err = s.AddBlock(ctx, entry.ID, "author", draft.Version, "", "core.text", 1)
 	if err != nil || len(draft.Document.Children) != 1 {
 		t.Fatalf("add=%#v err=%v", draft, err)
 	}
-	if _, err = s.AddBlock(ctx, entry.ID, "author", stale, "", "core.text"); !errors.Is(err, ErrConflict) {
+	if _, err = s.AddBlock(ctx, entry.ID, "author", stale, "", "core.text", 1); !errors.Is(err, ErrConflict) {
 		t.Fatalf("error=%v", err)
 	}
 	duplicated, err := s.DuplicateBlock(ctx, entry.ID, "author", draft.Version, draft.Document.Children[0].ID)

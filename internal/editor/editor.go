@@ -23,9 +23,9 @@ var (
 )
 
 type Draft struct {
-	EntryID, Title, Slug, UpdatedBy, UpdatedAt string
-	Document                                   documents.Document
-	Version                                    int64
+	EntryID, Kind, Title, Slug, UpdatedBy, UpdatedAt string
+	Document                                         documents.Document
+	Version                                          int64
 }
 
 type Service struct {
@@ -45,7 +45,7 @@ func (s *Service) Registry() *blocks.Registry { return s.registry }
 func (s *Service) LoadDraft(ctx context.Context, entryID, userID string) (Draft, error) {
 	draft, err := s.queries.GetEntryDraft(ctx, entryID)
 	if err == nil {
-		return s.fromRow(draft)
+		return s.fromRow(ctx, draft)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return Draft{}, fmt.Errorf("get editor draft: %w", err)
@@ -62,27 +62,30 @@ func (s *Service) LoadDraft(ctx context.Context, entryID, userID string) (Draft,
 		return Draft{}, fmt.Errorf("get latest revision: %w", err)
 	}
 	doc, err := documents.Parse([]byte(latest.DocumentJson))
-	if err != nil || s.registry.Validate(doc) != nil {
-		return Draft{}, fmt.Errorf("load latest revision document: %w", err)
+	if err != nil {
+		return Draft{}, fmt.Errorf("parse latest revision document: %w", err)
+	}
+	if err := s.registry.Validate(doc); err != nil {
+		return Draft{}, fmt.Errorf("validate latest revision document: %w", err)
 	}
 	now := s.now().UTC().Format(time.RFC3339Nano)
 	create := store.CreateEntryDraftParams{EntryID: entryID, Title: entry.Title, Slug: entry.Slug, DocumentJson: latest.DocumentJson, Version: 1, UpdatedBy: userID, UpdatedAt: now}
 	if err := s.queries.CreateEntryDraft(ctx, create); err != nil {
 		// Another request may have created the lazy draft first.
 		if loaded, loadErr := s.queries.GetEntryDraft(ctx, entryID); loadErr == nil {
-			return s.fromRow(loaded)
+			return s.fromRow(ctx, loaded)
 		}
 		return Draft{}, fmt.Errorf("create editor draft: %w", err)
 	}
-	return Draft{EntryID: entryID, Title: entry.Title, Slug: entry.Slug, Document: doc, Version: 1, UpdatedBy: userID, UpdatedAt: now}, nil
+	return Draft{EntryID: entryID, Kind: entryKind(entry.ContentTypeID), Title: entry.Title, Slug: entry.Slug, Document: doc, Version: 1, UpdatedBy: userID, UpdatedAt: now}, nil
 }
 
-func (s *Service) AddBlock(ctx context.Context, entryID, userID string, version int64, parentID, blockID string) (Draft, error) {
+func (s *Service) AddBlock(ctx context.Context, entryID, userID string, version int64, parentID, blockID string, blockVersion int) (Draft, error) {
 	draft, err := s.loadVersion(ctx, entryID, userID, version)
 	if err != nil {
 		return Draft{}, err
 	}
-	def, _, err := s.registry.Resolve(blockID, 1)
+	def, _, err := s.registry.Resolve(blockID, blockVersion)
 	if err != nil {
 		return Draft{}, fmt.Errorf("%w: unknown block", ErrValidation)
 	}
@@ -163,15 +166,18 @@ func (s *Service) MoveBlock(ctx context.Context, entryID, userID string, version
 	if err != nil {
 		return Draft{}, err
 	}
-	if err := documents.MoveNode(&draft.Document, nodeID, parentID, index); err != nil {
-		return Draft{}, fmt.Errorf("%w: %v", ErrValidation, err)
-	}
 	if parentID != "" {
 		parent := documents.Find(draft.Document.Children, parentID)
+		if parent == nil {
+			return Draft{}, fmt.Errorf("%w: parent not found", ErrValidation)
+		}
 		def, _, _ := s.registry.Resolve(parent.Type, parent.Version)
 		if !def.AllowsChildren {
 			return Draft{}, fmt.Errorf("%w: parent does not allow children", ErrValidation)
 		}
+	}
+	if err := documents.MoveNode(&draft.Document, nodeID, parentID, index); err != nil {
+		return Draft{}, fmt.Errorf("%w: %v", ErrValidation, err)
 	}
 	return s.persist(ctx, draft, userID)
 }
@@ -236,7 +242,7 @@ func (s *Service) persist(ctx context.Context, draft Draft, userID string) (Draf
 	draft.UpdatedBy, draft.UpdatedAt = userID, now
 	return draft, nil
 }
-func (s *Service) fromRow(row store.EntryDraft) (Draft, error) {
+func (s *Service) fromRow(ctx context.Context, row store.EntryDraft) (Draft, error) {
 	doc, err := documents.Parse([]byte(row.DocumentJson))
 	if err != nil {
 		return Draft{}, fmt.Errorf("parse editor draft: %w", err)
@@ -244,7 +250,11 @@ func (s *Service) fromRow(row store.EntryDraft) (Draft, error) {
 	if err := s.registry.ValidateDraft(doc); err != nil {
 		return Draft{}, fmt.Errorf("validate editor draft: %w", err)
 	}
-	return Draft{EntryID: row.EntryID, Title: row.Title, Slug: row.Slug, Document: doc, Version: row.Version, UpdatedBy: row.UpdatedBy, UpdatedAt: row.UpdatedAt}, nil
+	entry, err := s.queries.GetEntry(ctx, row.EntryID)
+	if err != nil {
+		return Draft{}, fmt.Errorf("get draft entry: %w", err)
+	}
+	return Draft{EntryID: row.EntryID, Kind: entryKind(entry.ContentTypeID), Title: row.Title, Slug: row.Slug, Document: doc, Version: row.Version, UpdatedBy: row.UpdatedBy, UpdatedAt: row.UpdatedAt}, nil
 }
 func defaults(schema map[string]blocks.Field) map[string]any {
 	values := make(map[string]any, len(schema))
@@ -252,10 +262,27 @@ func defaults(schema map[string]blocks.Field) map[string]any {
 		if field.Default != nil {
 			values[name] = field.Default
 		} else if field.Required {
-			values[name] = ""
+			switch field.Type {
+			case "boolean":
+				values[name] = false
+			case "integer":
+				values[name] = float64(0)
+			default:
+				values[name] = ""
+			}
 		}
 	}
 	return values
+}
+func entryKind(contentTypeID string) string {
+	switch contentTypeID {
+	case "content_type_page":
+		return "page"
+	case "content_type_post":
+		return "post"
+	default:
+		return ""
+	}
 }
 func validateEditorValue(value any, field blocks.Field) error {
 	return blocks.ValidateFieldValue(value, field)
