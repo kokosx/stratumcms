@@ -11,9 +11,12 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kokosx/stratumcms/internal/config"
+	"github.com/kokosx/stratumcms/internal/content"
 	"github.com/kokosx/stratumcms/internal/migrations"
+	store "github.com/kokosx/stratumcms/internal/storage/sqlc"
 	"github.com/kokosx/stratumcms/internal/storage/turso"
 )
 
@@ -156,9 +159,71 @@ func TestPublicRouteUsesPublishedRevisionAndAdminKindIsEnforced(t *testing.T) {
 	}
 }
 
+func TestPublicPageCacheServesHitWithoutDatabaseAndSupportsHEAD(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	db, err := turso.Open(ctx, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := store.New(db).CreateUser(ctx, store.CreateUserParams{ID: "author", Email: "author@example.test", Username: "author", PasswordHash: "hash", DisplayName: "Author", Role: "administrator", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	service := content.New(db)
+	entry, err := service.CreateEntry(ctx, "page", "author", content.Input{Title: "About"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PublishEntry(ctx, entry.ID, "author", content.Input{Title: "About"}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(NewHandler(db, slog.New(slog.NewTextHandler(io.Discard, nil)), config.Config{DataDir: dataDir}))
+	defer server.Close()
+	first, err := http.Get(server.URL + "/about")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Body.Close()
+	if first.StatusCode != http.StatusOK || first.Header.Get("ETag") == "" {
+		t.Fatalf("first response: %d %#v", first.StatusCode, first.Header)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := http.Get(server.URL + "/about")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusOK {
+		t.Fatalf("cache hit status = %d", second.StatusCode)
+	}
+	req, err := http.NewRequest(http.MethodHead, server.URL+"/about", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer head.Body.Close()
+	body, err := io.ReadAll(head.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head.StatusCode != http.StatusOK || len(body) != 0 || head.Header.Get("ETag") != first.Header.Get("ETag") {
+		t.Fatalf("head = %d body=%d headers=%#v", head.StatusCode, len(body), head.Header)
+	}
+}
+
 func testServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	db, err := turso.Open(context.Background(), t.TempDir())
+	dataDir := t.TempDir()
+	db, err := turso.Open(context.Background(), dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +231,7 @@ func testServer(t *testing.T) *httptest.Server {
 	if err := migrations.Run(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	return httptest.NewServer(NewHandler(db, slog.New(slog.NewTextHandler(io.Discard, nil)), config.Config{}))
+	return httptest.NewServer(NewHandler(db, slog.New(slog.NewTextHandler(io.Discard, nil)), config.Config{DataDir: dataDir}))
 }
 func testClient(t *testing.T) *http.Client {
 	t.Helper()

@@ -50,8 +50,8 @@ type DraftUpdate struct {
 	Version                              int64
 }
 type Published struct {
-	Title, Kind string
-	Document    documents.Document
+	EntryID, RevisionID, Kind, Title, Path string
+	Document                               documents.Document
 }
 
 func Slug(value string) string {
@@ -283,7 +283,7 @@ func (s *Service) ResolvePublished(ctx context.Context, path string) (Published,
 	if err := s.registry.Validate(document); err != nil {
 		return Published{}, fmt.Errorf("validate published document: %w", err)
 	}
-	return Published{Title: row.Title_2, Kind: entryKind(row.ContentTypeID), Document: document}, nil
+	return Published{EntryID: row.ID, RevisionID: row.ID_2, Title: row.Title_2, Kind: entryKind(row.ContentTypeID), Path: path, Document: document}, nil
 }
 func entryKind(typeID string) string {
 	if typeID == "content_type_post" {

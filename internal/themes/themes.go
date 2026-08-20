@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"sort"
 )
 
 //go:embed themes/*
@@ -74,6 +75,7 @@ func (r *Registry) Definitions() []Manifest {
 	for _, t := range r.themes {
 		out = append(out, t.Manifest)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 func (t Theme) Execute(w interface{ Write([]byte) (int, error) }, kind string, data any) error {

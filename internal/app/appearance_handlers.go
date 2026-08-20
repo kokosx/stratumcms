@@ -66,6 +66,9 @@ func (h *handler) saveTheme(w http.ResponseWriter, r *http.Request) {
 		h.render(w, "appearance_themes", d)
 		return
 	}
+	if err := h.pages.InvalidateTag("presentation"); err != nil {
+		h.logger.Error("page_cache_invalidate", "tag", "presentation", "error", err)
+	}
 	http.Redirect(w, r, "/admin/appearance/themes", http.StatusSeeOther)
 }
 func (h *handler) saveStyles(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +81,12 @@ func (h *handler) saveStyles(w http.ResponseWriter, r *http.Request) {
 		h.render(w, "appearance_styles", d)
 		return
 	}
-	version, _ := strconv.ParseInt(r.FormValue("version"), 10, 64)
+	version, err := strconv.ParseInt(r.FormValue("version"), 10, 64)
+	if err != nil || version < 1 {
+		d.Error = "Invalid settings version."
+		h.render(w, "appearance_styles", d)
+		return
+	}
 	t := styles.Tokens{Background: r.FormValue("background"), Surface: r.FormValue("surface"), Text: r.FormValue("text"), Muted: r.FormValue("muted"), Brand: r.FormValue("brand"), Border: r.FormValue("border"), Body: r.FormValue("body"), Heading: r.FormValue("heading"), RadiusSmall: r.FormValue("radius_small"), RadiusMedium: r.FormValue("radius_medium"), RadiusLarge: r.FormValue("radius_large"), ContainerWidth: r.FormValue("container_width")}
 	if _, err := h.styles.Update(r.Context(), version, d.Settings.ActiveTheme, t, r.FormValue("custom_css")); err != nil {
 		d.Error = err.Error()
@@ -86,6 +94,9 @@ func (h *handler) saveStyles(w http.ResponseWriter, r *http.Request) {
 		d.Settings.CustomCSS = r.FormValue("custom_css")
 		h.render(w, "appearance_styles", d)
 		return
+	}
+	if err := h.pages.InvalidateTag("presentation"); err != nil {
+		h.logger.Error("page_cache_invalidate", "tag", "presentation", "error", err)
 	}
 	http.Redirect(w, r, "/admin/appearance/styles", http.StatusSeeOther)
 }

@@ -15,11 +15,14 @@ import (
 	"time"
 
 	"github.com/kokosx/stratumcms/internal/auth"
+	"github.com/kokosx/stratumcms/internal/cache"
 	"github.com/kokosx/stratumcms/internal/config"
 	"github.com/kokosx/stratumcms/internal/content"
 	"github.com/kokosx/stratumcms/internal/editor"
 	"github.com/kokosx/stratumcms/internal/migrations"
 	"github.com/kokosx/stratumcms/internal/platform"
+	"github.com/kokosx/stratumcms/internal/presentation"
+	"github.com/kokosx/stratumcms/internal/publishing"
 	"github.com/kokosx/stratumcms/internal/renderer"
 	store "github.com/kokosx/stratumcms/internal/storage/sqlc"
 	"github.com/kokosx/stratumcms/internal/storage/turso"
@@ -92,12 +95,24 @@ func NewHandler(db *sql.DB, logger *slog.Logger, cfg config.Config) http.Handler
 	if err != nil {
 		panic(fmt.Sprintf("load themes: %v", err))
 	}
-	h := &handler{auth: newAuthService(db), content: contentService, editor: editor.New(db, contentService), renderer: renderer.New(contentService.Registry()), styles: styles.New(store.New(db)), themes: themeRegistry, templates: templates, logger: logger, secureCookies: cfg.SecureCookies}
+	rendererService := renderer.New(contentService.Registry())
+	stylesService := styles.New(store.New(db))
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+	pages, err := cache.New(dataDir)
+	if err != nil {
+		panic(fmt.Sprintf("create page cache: %v", err))
+	}
+	presentationService := presentation.New(rendererService, stylesService, themeRegistry)
+	h := &handler{auth: newAuthService(db), content: contentService, editor: editor.New(db, contentService), presentation: presentationService, pages: pages, styles: stylesService, themes: themeRegistry, templates: templates, logger: logger, secureCookies: cfg.SecureCookies}
+	h.publishing = publishing.New(contentService, pages, presentationService, logger)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /static/app.css", css)
 	mux.HandleFunc("GET /assets/site.css", h.siteCSS)
-	mux.HandleFunc("GET /assets/themes/{theme}/{asset}", h.themeAsset)
+	mux.HandleFunc("GET /assets/themes/{theme}/{asset...}", h.themeAsset)
 	mux.HandleFunc("GET /static/editor.css", editorCSS)
 	mux.HandleFunc("GET /static/datastar-1.0.0.js", datastarJS)
 	mux.HandleFunc("GET /setup", h.setupForm)
@@ -141,7 +156,9 @@ type handler struct {
 	auth          *authService
 	content       *content.Service
 	editor        *editor.Service
-	renderer      *renderer.Renderer
+	presentation  *presentation.Service
+	pages         *cache.Pages
+	publishing    *publishing.Service
 	templates     *template.Template
 	styles        *styles.Service
 	themes        *themes.Registry
@@ -154,7 +171,14 @@ func (h *handler) public(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	published, err := h.content.ResolvePublished(r.Context(), r.URL.Path)
+	path := r.URL.Path
+	if cached, ok := h.pages.Get(path); ok {
+		h.logger.Debug("page_cache_hit", "path", path)
+		h.writePublic(w, r, cached.HTML, cached.ETag)
+		return
+	}
+	h.logger.Debug("page_cache_miss", "path", path)
+	published, err := h.content.ResolvePublished(r.Context(), path)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			http.NotFound(w, r)
@@ -163,13 +187,34 @@ func (h *handler) public(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	body, err := h.renderer.Render(published.Document)
+	result, err := h.presentation.Render(r.Context(), published.Kind, published.Title, published.Document)
 	if err != nil {
-		h.logger.Error("render published document", "error", err)
+		h.logger.Error("render published page", "error", err)
 		h.internalError(w, err)
 		return
 	}
-	h.renderPresentation(w, r, published.Kind, published.Title, body)
+	etag := publishing.ETag(result.HTML)
+	entry := cache.Entry{Path: published.Path, HTML: result.HTML, ETag: etag, Dependencies: []string{"entry:" + published.EntryID, "revision:" + published.RevisionID, "theme:" + result.ThemeID, "presentation", "route:" + published.Path}}
+	if err := h.pages.Put(entry); err != nil {
+		h.logger.Error("page_cache_write", "path", path, "error", err)
+	} else {
+		h.logger.Debug("page_cache_write", "path", path)
+	}
+	h.writePublic(w, r, result.HTML, etag)
+}
+
+func (h *handler) writePublic(w http.ResponseWriter, r *http.Request, body []byte, etag string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	w.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(body)
 }
 
 type formData struct {

@@ -74,13 +74,14 @@ func (h *handler) editorPreview(w http.ResponseWriter, r *http.Request) {
 		h.editorError(w, r, err)
 		return
 	}
-	body, err := h.renderer.RenderDraft(draft.Document)
+	w.Header().Set("Cache-Control", "no-store")
+	result, err := h.presentation.RenderDraft(r.Context(), draft.Kind, draft.Title, draft.Document)
 	if err != nil {
 		h.internalError(w, err)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	h.renderPresentation(w, r, draft.Kind, draft.Title, body)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(result.HTML)
 }
 
 func (h *handler) editorAddBlock(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +125,7 @@ func (h *handler) editorSave(w http.ResponseWriter, r *http.Request) {
 }
 func (h *handler) editorPublish(w http.ResponseWriter, r *http.Request) {
 	h.editorMutation(w, r, "Published", func(v editorValues) (editor.Draft, error) {
-		return h.editor.Publish(r.Context(), r.PathValue("id"), currentUser(r).ID, v.version)
+		return h.publishing.Publish(r.Context(), h.editor, r.PathValue("id"), currentUser(r).ID, v.version)
 	})
 }
 
