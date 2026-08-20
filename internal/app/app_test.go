@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/kokosx/stratumcms/internal/config"
@@ -68,6 +70,79 @@ func TestEmailLoginIsCaseInsensitive(t *testing.T) {
 	setup(t, client, s.URL, "admin@example.test", "admin")
 	logout(t, client, s.URL)
 	login(t, client, s.URL, "ADMIN@EXAMPLE.TEST", "a long test password")
+}
+
+func TestConcurrentSetupCreatesExactlyOneAdministrator(t *testing.T) {
+	ctx := context.Background()
+	db, err := turso.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	service := newAuthService(db)
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func(i int) {
+			_, err := service.setup(ctx, setupInput{Email: fmt.Sprintf("admin%d@example.test", i), Username: fmt.Sprintf("admin%d", i), DisplayName: "Administrator", Password: "a long test password"})
+			results <- err
+		}(i)
+	}
+	winners := 0
+	for i := 0; i < 2; i++ {
+		if err := <-results; err == nil {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("successful setups = %d, want 1", winners)
+	}
+	var count int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE role='administrator'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("administrators=%d", count)
+	}
+}
+
+func TestPublicRouteUsesPublishedRevisionAndAdminKindIsEnforced(t *testing.T) {
+	s := testServer(t)
+	defer s.Close()
+	client := testClient(t)
+	setup(t, client, s.URL, "admin@example.test", "admin")
+	token := csrf(t, client, s.URL+"/admin/pages/new")
+	created := post(t, client, s.URL+"/admin/pages", url.Values{"csrf_token": {token}, "title": {"About"}, "slug": {"about"}})
+	if created.Request.URL.Path == "/admin/pages" {
+		t.Fatal("page creation did not redirect")
+	}
+	pageID := strings.Split(created.Request.URL.Path, "/")[3]
+	public := get(t, client, s.URL+"/about")
+	if public.StatusCode != http.StatusNotFound {
+		t.Fatalf("draft public status=%d", public.StatusCode)
+	}
+	wrongKind := get(t, client, s.URL+"/admin/posts/"+pageID+"/edit")
+	if wrongKind.StatusCode != http.StatusNotFound {
+		t.Fatalf("post URL could edit page: %d", wrongKind.StatusCode)
+	}
+	token = csrf(t, client, s.URL+"/admin/pages/"+pageID+"/edit")
+	published := post(t, client, s.URL+"/admin/pages/"+pageID, url.Values{"csrf_token": {token}, "title": {"About"}, "slug": {"about"}, "action": {"publish"}})
+	if published.Request.URL.Path != "/admin/pages/"+pageID+"/edit" {
+		t.Fatalf("publish ended at %s", published.Request.URL.Path)
+	}
+	public = get(t, client, s.URL+"/about")
+	if public.StatusCode != http.StatusOK {
+		t.Fatalf("published public status=%d", public.StatusCode)
+	}
+	body, err := io.ReadAll(public.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "<title>About</title>") {
+		t.Fatalf("missing public layout title: %s", body)
+	}
 }
 
 func testServer(t *testing.T) *httptest.Server {

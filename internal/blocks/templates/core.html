@@ -1,0 +1,5 @@
+{{define "heading"}}<h{{index .Node.Settings "level"}} data-node-id="{{.Node.ID}}" data-block-type="{{.Node.Type}}">{{index .Node.Props "text"}}</h{{index .Node.Settings "level"}}>{{end}}
+{{define "text"}}<p data-node-id="{{.Node.ID}}" data-block-type="{{.Node.Type}}">{{index .Node.Props "text"}}</p>{{end}}
+{{define "button"}}<a data-node-id="{{.Node.ID}}" data-block-type="{{.Node.Type}}" href="{{index .Node.Props "url"}}">{{index .Node.Props "label"}}</a>{{end}}
+{{define "hero"}}<section data-node-id="{{.Node.ID}}" data-block-type="{{.Node.Type}}" class="hero hero-{{index .Node.Settings "variant"}}"><h1>{{index .Node.Props "heading"}}</h1>{{with index .Node.Props "description"}}<p>{{.}}</p>{{end}}</section>{{end}}
+{{define "container"}}<div data-node-id="{{.Node.ID}}" data-block-type="{{.Node.Type}}">{{.Children}}</div>{{end}}

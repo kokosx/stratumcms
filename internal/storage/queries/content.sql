@@ -4,6 +4,10 @@ SELECT id, handle, name, schema_json, created_at, updated_at FROM content_types 
 -- name: GetEntry :one
 SELECT id, content_type_id, title, slug, status, author_id, parent_id, published_revision_id, created_at, updated_at, published_at FROM entries WHERE id = ?;
 
+-- name: GetEntryByType :one
+SELECT e.id, e.content_type_id, e.title, e.slug, e.status, e.author_id, e.parent_id, e.published_revision_id, e.created_at, e.updated_at, e.published_at
+FROM entries e JOIN content_types ct ON ct.id = e.content_type_id WHERE e.id = ? AND ct.handle = ?;
+
 -- name: GetEntryRoute :one
 SELECT id, path, resource_type, resource_id, canonical, created_at, updated_at
 FROM routes WHERE resource_type = 'entry' AND resource_id = ? AND canonical = 1;
@@ -31,6 +35,20 @@ INSERT INTO revisions (id, entry_id, number, title, document_json, created_by, c
 -- name: ListRevisions :many
 SELECT r.id, r.entry_id, r.number, r.title, r.document_json, r.created_by, r.created_at, u.display_name
 FROM revisions r JOIN users u ON u.id = r.created_by WHERE r.entry_id = ? ORDER BY r.number DESC;
+
+-- name: GetLatestRevision :one
+SELECT id, entry_id, number, title, document_json, created_by, created_at FROM revisions WHERE entry_id = ? ORDER BY number DESC LIMIT 1;
+
+-- name: GetRevision :one
+SELECT id, entry_id, number, title, document_json, created_by, created_at FROM revisions WHERE id = ?;
+
+-- name: ResolvePublishedRoute :one
+SELECT e.id, e.content_type_id, e.title, e.slug, e.status, e.author_id, e.parent_id, e.published_revision_id, e.created_at, e.updated_at, e.published_at,
+       r.id, r.entry_id, r.number, r.title, r.document_json, r.created_by, r.created_at
+FROM routes route
+JOIN entries e ON e.id = route.resource_id
+JOIN revisions r ON r.id = e.published_revision_id
+WHERE route.path = ? AND route.resource_type = 'entry' AND route.canonical = 1 AND e.status = 'published';
 
 -- name: CreateRoute :exec
 INSERT INTO routes (id, path, resource_type, resource_id, canonical, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?);

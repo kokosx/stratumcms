@@ -19,6 +19,7 @@ import (
 	"github.com/kokosx/stratumcms/internal/content"
 	"github.com/kokosx/stratumcms/internal/migrations"
 	"github.com/kokosx/stratumcms/internal/platform"
+	"github.com/kokosx/stratumcms/internal/renderer"
 	store "github.com/kokosx/stratumcms/internal/storage/sqlc"
 	"github.com/kokosx/stratumcms/internal/storage/turso"
 )
@@ -83,7 +84,9 @@ func NewHandler(db *sql.DB, logger *slog.Logger, cfg config.Config) http.Handler
 	if err != nil {
 		panic(fmt.Sprintf("parse embedded templates: %v", err))
 	}
-	h := &handler{auth: newAuthService(db), content: content.New(db), templates: templates, logger: logger, secureCookies: cfg.SecureCookies}
+	contentService := content.New(db)
+	publicTemplate := template.Must(template.New("public").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>{{.Title}}</title></head><body><main>{{.Content}}</main></body></html>`))
+	h := &handler{auth: newAuthService(db), content: contentService, renderer: renderer.New(contentService.Registry()), templates: templates, publicTemplate: publicTemplate, logger: logger, secureCookies: cfg.SecureCookies}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /static/app.css", css)
@@ -103,6 +106,7 @@ func NewHandler(db *sql.DB, logger *slog.Logger, cfg config.Config) http.Handler
 	mux.Handle("POST /admin/pages", h.requireAuth(http.HandlerFunc(h.createEntry("page"))))
 	mux.Handle("GET /admin/pages/{id}/edit", h.requireAuth(http.HandlerFunc(h.editEntry("page"))))
 	mux.Handle("POST /admin/pages/{id}", h.requireAuth(http.HandlerFunc(h.updateEntry("page"))))
+	mux.HandleFunc("GET /{path...}", h.public)
 	return h.securityHeaders(h.requestLog(mux))
 }
 
@@ -112,12 +116,40 @@ func health(w http.ResponseWriter, _ *http.Request) {
 }
 
 type handler struct {
-	auth          *authService
-	content       *content.Service
-	templates     *template.Template
-	logger        *slog.Logger
-	secureCookies bool
+	auth           *authService
+	content        *content.Service
+	renderer       *renderer.Renderer
+	templates      *template.Template
+	publicTemplate *template.Template
+	logger         *slog.Logger
+	secureCookies  bool
 }
+
+func (h *handler) public(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/admin/") || strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/login" || r.URL.Path == "/setup" || r.URL.Path == "/health" {
+		http.NotFound(w, r)
+		return
+	}
+	published, err := h.content.ResolvePublished(r.Context(), r.URL.Path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	body, err := h.renderer.Render(published.Document)
+	if err != nil {
+		h.logger.Error("render published document", "error", err)
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := h.publicTemplate.Execute(w, struct {
+		Title   string
+		Content template.HTML
+	}{published.Title, body}); err != nil {
+		h.logger.Error("render public template", "error", err)
+	}
+}
+
 type formData struct {
 	CSRFToken, Error, Email, Username, DisplayName, Login string
 	User                                                  userView

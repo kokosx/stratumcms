@@ -121,7 +121,7 @@ func (s *authService) logout(ctx context.Context, token string) error {
 }
 func (s *authService) configured(ctx context.Context) (bool, error) {
 	configured, err := s.queries.IsConfigured(ctx)
-	return configured, err
+	return configured != 0, err
 }
 func timestamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 func validateSetup(in setupInput) error {

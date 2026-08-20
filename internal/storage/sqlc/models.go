@@ -4,11 +4,56 @@
 
 package sqlc
 
-import "database/sql"
+import (
+	"database/sql"
+)
+
+type ContentType struct {
+	ID         string
+	Handle     string
+	Name       string
+	SchemaJson string
+	CreatedAt  string
+	UpdatedAt  string
+}
+
+type Entry struct {
+	ID                  string
+	ContentTypeID       string
+	Title               string
+	Slug                string
+	Status              string
+	AuthorID            string
+	ParentID            sql.NullString
+	PublishedRevisionID sql.NullString
+	CreatedAt           string
+	UpdatedAt           string
+	PublishedAt         sql.NullString
+}
 
 type Installation struct {
 	ID        int64
 	CreatedAt string
+}
+
+type Revision struct {
+	ID           string
+	EntryID      string
+	Number       int64
+	Title        string
+	DocumentJson string
+	CreatedBy    string
+	CreatedAt    string
+}
+
+type Route struct {
+	ID           string
+	Path         string
+	ResourceType string
+	ResourceID   string
+	Canonical    int64
+	CreatedAt    string
+	UpdatedAt    string
 }
 
 type SchemaMigration struct {
@@ -34,22 +79,4 @@ type User struct {
 	Role         string
 	CreatedAt    string
 	UpdatedAt    string
-}
-
-type ContentType struct{ ID, Handle, Name, SchemaJson, CreatedAt, UpdatedAt string }
-type Entry struct {
-	ID, ContentTypeID, Title, Slug, Status, AuthorID string
-	ParentID, PublishedRevisionID                    sql.NullString
-	CreatedAt, UpdatedAt                             string
-	PublishedAt                                      sql.NullString
-}
-type Revision struct {
-	ID, EntryID                               string
-	Number                                    int64
-	Title, DocumentJson, CreatedBy, CreatedAt string
-}
-type Route struct {
-	ID, Path, ResourceType, ResourceID string
-	Canonical                          int64
-	CreatedAt, UpdatedAt               string
 }

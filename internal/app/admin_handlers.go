@@ -45,12 +45,12 @@ func (h *handler) entries(kind string) http.HandlerFunc {
 			h.internalError(w, err)
 			return
 		}
-		h.render(w, "admin_list", adminListData{User: currentUser(r), CSRFToken: h.csrfToken(w, r), Kind: kind, Singular: strings.Title(kind), Entries: items})
+		h.render(w, "admin_list", adminListData{User: currentUser(r), CSRFToken: h.csrfToken(w, r), Kind: kind, Singular: label(kind), Entries: items})
 	}
 }
 func (h *handler) newEntry(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		h.render(w, "admin_edit", adminEditData{User: currentUser(r), CSRFToken: h.csrfToken(w, r), Kind: kind, Singular: strings.Title(kind), IsNew: true})
+		h.render(w, "admin_edit", adminEditData{User: currentUser(r), CSRFToken: h.csrfToken(w, r), Kind: kind, Singular: label(kind), IsNew: true})
 	}
 }
 func (h *handler) createEntry(kind string) http.HandlerFunc {
@@ -69,7 +69,7 @@ func (h *handler) createEntry(kind string) http.HandlerFunc {
 }
 func (h *handler) editEntry(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		entry, err := h.content.GetEntry(r.Context(), r.PathValue("id"))
+		entry, err := h.content.GetEntryByType(r.Context(), r.PathValue("id"), kind)
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -79,12 +79,12 @@ func (h *handler) editEntry(kind string) http.HandlerFunc {
 			h.internalError(w, err)
 			return
 		}
-		h.render(w, "admin_edit", adminEditData{User: currentUser(r), CSRFToken: h.csrfToken(w, r), Kind: kind, Singular: strings.Title(kind), Entry: entry, Revisions: revisions})
+		h.render(w, "admin_edit", adminEditData{User: currentUser(r), CSRFToken: h.csrfToken(w, r), Kind: kind, Singular: label(kind), Entry: entry, Revisions: revisions})
 	}
 }
 func (h *handler) updateEntry(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		entry, err := h.content.GetEntry(r.Context(), r.PathValue("id"))
+		entry, err := h.content.GetEntryByType(r.Context(), r.PathValue("id"), kind)
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -110,7 +110,16 @@ func (h *handler) updateEntry(kind string) http.HandlerFunc {
 }
 func (h *handler) entryError(w http.ResponseWriter, r *http.Request, kind string, isNew bool, entry content.Entry, message string) {
 	revisions, _ := h.content.ListRevisions(r.Context(), entry.ID)
-	h.render(w, "admin_edit", adminEditData{User: currentUser(r), CSRFToken: h.csrfToken(w, r), Kind: kind, Singular: strings.Title(kind), Entry: entry, Revisions: revisions, IsNew: isNew, Error: message})
+	h.render(w, "admin_edit", adminEditData{User: currentUser(r), CSRFToken: h.csrfToken(w, r), Kind: kind, Singular: label(kind), Entry: entry, Revisions: revisions, IsNew: isNew, Error: message})
+}
+func label(kind string) string {
+	if kind == "page" {
+		return "Page"
+	}
+	if kind == "post" {
+		return "Post"
+	}
+	return kind
 }
 func entryError(err error) string {
 	if errors.Is(err, content.ErrValidation) {
